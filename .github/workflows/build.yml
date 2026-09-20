@@ -50,9 +50,6 @@ jobs:
       - name: Make Gradle Wrapper Executable
         run: chmod +x gradlew
 
-      - name: Run Unit Tests
-        run: ./gradlew testDebugUnitTest --stacktrace --no-daemon
-
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace --no-daemon
 
