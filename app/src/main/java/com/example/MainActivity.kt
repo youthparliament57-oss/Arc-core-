@@ -9,9 +9,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,31 +20,41 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -57,7 +66,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -75,6 +86,8 @@ import com.example.ar.ArSessionManager
 import com.example.ar.ArSessionState
 import com.example.ar.ArSurfaceView
 import com.example.ar.CameraPoseData
+import com.example.ar.DetectedPlaneData
+import com.example.ar.PlanesTelemetry
 import com.example.ui.theme.MyApplicationTheme
 import com.google.ar.core.TrackingFailureReason
 import com.google.ar.core.TrackingState
@@ -95,8 +108,12 @@ class MainActivity : ComponentActivity() {
             MyApplicationTheme {
                 val sessionState by arSessionManager.sessionState.collectAsState()
                 val cameraPose by arSessionManager.cameraPose.collectAsState()
+                val planesTelemetry by arSessionManager.planesTelemetry.collectAsState()
                 val context = LocalContext.current
                 val lifecycleOwner = LocalLifecycleOwner.current
+
+                var showSettingsSheet by remember { mutableStateOf(false) }
+                var showDebugTelemetryHud by remember { mutableStateOf(false) }
 
                 var hasCameraPermission by remember {
                     mutableStateOf(
@@ -156,7 +173,7 @@ class MainActivity : ComponentActivity() {
                             .padding(innerPadding)
                     ) {
                         if (hasCameraPermission) {
-                            // Live AR Camera Feed via ARCore
+                            // Live AR Camera Feed + OpenGL 3D Surface Visualization
                             AndroidView(
                                 factory = { ctx ->
                                     ArSurfaceView(ctx).also { view ->
@@ -166,6 +183,9 @@ class MainActivity : ComponentActivity() {
                                         }
                                         view.onTrackingUpdated = { state, reason ->
                                             arSessionManager.updateTrackingState(state, reason)
+                                        }
+                                        view.onPlanesUpdated = { telemetry ->
+                                            arSessionManager.updatePlanesTelemetry(telemetry)
                                         }
                                         view.onSessionError = { message ->
                                             arSessionManager.reportError(message)
@@ -178,26 +198,74 @@ class MainActivity : ComponentActivity() {
                                     .testTag("ar_camera_view")
                             )
 
-                            // Status HUD badge overlay at top
-                            ArStatusOverlay(
+                            // Step 3: Top Status Indicator & Settings Button
+                            ArTopBar(
                                 state = sessionState,
+                                planesTelemetry = planesTelemetry,
+                                onOpenSettings = { showSettingsSheet = true },
                                 modifier = Modifier
                                     .align(Alignment.TopCenter)
                                     .statusBarsPadding()
-                                    .padding(top = 16.dp)
+                                    .padding(horizontal = 16.dp, vertical = 12.dp)
                             )
 
-                            // Step 2: AR Motion Tracking Development / Debug Overlay
-                            ArMotionDebugOverlay(
+                            // Step 3: Central Spatial Reticle
+                            ArCentralReticle(
                                 state = sessionState,
-                                pose = cameraPose,
+                                isAimingAtSurface = planesTelemetry.isAimingAtSurface,
                                 modifier = Modifier
-                                    .align(Alignment.TopStart)
-                                    .statusBarsPadding()
-                                    .padding(top = 64.dp, start = 16.dp, end = 16.dp)
+                                    .align(Alignment.Center)
+                                    .size(64.dp)
+                                    .testTag("ar_reticle")
                             )
+
+                            // Step 3: Surface Detection Feedback Banner
+                            ArSurfaceFeedbackBanner(
+                                hasDetectedSurface = planesTelemetry.hasDetectedUsableSurface,
+                                isAimingAtSurface = planesTelemetry.isAimingAtSurface,
+                                activePlaneCount = planesTelemetry.activePlaneCount,
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .padding(top = 110.dp)
+                                    .testTag("ar_feedback_banner")
+                            )
+
+                            // Step 3: Bottom Surface Telemetry Bar
+                            ArBottomSurfaceBar(
+                                planesTelemetry = planesTelemetry,
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .navigationBarsPadding()
+                                    .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                                    .testTag("ar_bottom_surface_bar")
+                            )
+
+                            // Step 2: On-screen Developer Telemetry HUD (toggled via Settings)
+                            if (showDebugTelemetryHud) {
+                                ArMotionDebugOverlay(
+                                    state = sessionState,
+                                    pose = cameraPose,
+                                    planesTelemetry = planesTelemetry,
+                                    onClose = { showDebugTelemetryHud = false },
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .statusBarsPadding()
+                                        .padding(top = 64.dp, start = 16.dp, end = 16.dp)
+                                )
+                            }
+
+                            // Step 3: Settings & Diagnostics Modal Sheet
+                            if (showSettingsSheet) {
+                                ArSettingsDiagnosticsSheet(
+                                    pose = cameraPose,
+                                    planesTelemetry = planesTelemetry,
+                                    showHudOnScreen = showDebugTelemetryHud,
+                                    onToggleHudOnScreen = { showDebugTelemetryHud = it },
+                                    onDismiss = { showSettingsSheet = false }
+                                )
+                            }
                         } else {
-                            // Permission Request UI
+                            // Camera Permission Request Screen
                             CameraPermissionRequiredScreen(
                                 onRequestPermission = {
                                     permissionLauncher.launch(Manifest.permission.CAMERA)
@@ -205,7 +273,7 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // Error / Unsupported / Install Dialog State
+                        // Error / Unsupported / Install Overlays
                         when (val state = sessionState) {
                             is ArSessionState.UnsupportedDevice,
                             is ArSessionState.Error -> {
@@ -239,22 +307,25 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * Minimal clean Material 3 tracking status pill overlay.
+ * Top Status Bar containing the minimal AR status indicator and the Settings/Diagnostics button.
  */
 @Composable
-fun ArStatusOverlay(
+fun ArTopBar(
     state: ArSessionState,
+    planesTelemetry: PlanesTelemetry,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    AnimatedVisibility(
-        visible = true,
-        enter = fadeIn(),
-        exit = fadeOut(),
-        modifier = modifier
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = modifier.fillMaxWidth()
     ) {
+        // Status Indicator Pill
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = Color.Black.copy(alpha = 0.65f),
+            color = Color(0xD90B1120),
+            border = BorderStroke(1.dp, Color(0x33FFFFFF)),
             contentColor = Color.White,
             tonalElevation = 6.dp,
             modifier = Modifier.testTag("ar_status_chip")
@@ -262,56 +333,623 @@ fun ArStatusOverlay(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
-                val (indicatorColor, statusText) = when (state) {
-                    is ArSessionState.CheckingCompatibility -> {
-                        Color(0xFF64B5F6) to stringResource(R.string.status_checking_compatibility)
-                    }
-                    is ArSessionState.PermissionRequired -> {
-                        Color(0xFFFFB74D) to stringResource(R.string.camera_permission_required_title)
-                    }
-                    is ArSessionState.ArCoreInstallRequired -> {
-                        Color(0xFFFFB74D) to stringResource(R.string.arcore_installing)
-                    }
-                    is ArSessionState.UnsupportedDevice -> {
-                        Color(0xFFE57373) to stringResource(R.string.arcore_not_supported)
-                    }
-                    is ArSessionState.Ready -> {
-                        Color(0xFF81C784) to stringResource(R.string.status_ready)
-                    }
+                val (dotColor, statusLabel) = when (state) {
+                    is ArSessionState.CheckingCompatibility -> Color(0xFF38BDF8) to stringResource(R.string.status_checking_compatibility)
+                    is ArSessionState.PermissionRequired -> Color(0xFFF59E0B) to stringResource(R.string.status_ar_searching)
+                    is ArSessionState.ArCoreInstallRequired -> Color(0xFFF59E0B) to stringResource(R.string.status_ar_unavailable)
+                    is ArSessionState.UnsupportedDevice -> Color(0xFFEF4444) to stringResource(R.string.status_ar_unavailable)
+                    is ArSessionState.Ready -> Color(0xFF10B981) to stringResource(R.string.status_ar_tracking)
                     is ArSessionState.Active -> {
                         when (state.trackingState) {
-                            TrackingState.TRACKING -> Color(0xFF4CAF50) to stringResource(R.string.status_tracking_normal)
+                            TrackingState.TRACKING -> Color(0xFF10B981) to stringResource(R.string.status_ar_tracking)
                             TrackingState.PAUSED -> {
-                                val reasonStr = formatFailureReason(state.failureReason)
-                                Color(0xFFFFB300) to stringResource(R.string.status_tracking_limited, reasonStr)
+                                if (state.failureReason == TrackingFailureReason.NONE) {
+                                    Color(0xFFF59E0B) to stringResource(R.string.status_ar_searching)
+                                } else {
+                                    Color(0xFFF97316) to stringResource(R.string.status_ar_limited)
+                                }
                             }
-                            TrackingState.STOPPED -> Color(0xFFE53935) to stringResource(R.string.status_tracking_paused)
+                            TrackingState.STOPPED -> Color(0xFFEF4444) to stringResource(R.string.status_ar_unavailable)
                         }
                     }
-                    is ArSessionState.Paused -> {
-                        Color(0xFFFFB300) to stringResource(R.string.status_tracking_paused)
-                    }
-                    is ArSessionState.Error -> {
-                        Color(0xFFE53935) to state.message
-                    }
+                    is ArSessionState.Paused -> Color(0xFFF59E0B) to stringResource(R.string.status_ar_searching)
+                    is ArSessionState.Error -> Color(0xFFEF4444) to stringResource(R.string.status_ar_unavailable)
                 }
 
                 Box(
                     modifier = Modifier
-                        .size(10.dp)
+                        .size(9.dp)
                         .clip(CircleShape)
-                        .background(indicatorColor)
+                        .background(dotColor)
                 )
 
                 Text(
-                    text = statusText,
+                    text = statusLabel,
                     fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
+                )
+
+                if (planesTelemetry.hasDetectedUsableSurface) {
+                    Text(
+                        text = "• ${planesTelemetry.activePlaneCount} surface${if (planesTelemetry.activePlaneCount > 1) "s" else ""}",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Normal,
+                        color = Color(0xFF38BDF8)
+                    )
+                }
+            }
+        }
+
+        // Settings / Info Button
+        Surface(
+            shape = CircleShape,
+            color = Color(0xD90B1120),
+            border = BorderStroke(1.dp, Color(0x33FFFFFF)),
+            contentColor = Color.White,
+            modifier = Modifier.size(42.dp)
+        ) {
+            IconButton(
+                onClick = onOpenSettings,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("ar_settings_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = "Settings and Diagnostics",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Step 3: Central AR Reticle.
+ * Center-anchored, visually subtle, and adaptive to surface detection aiming state.
+ */
+@Composable
+fun ArCentralReticle(
+    state: ArSessionState,
+    isAimingAtSurface: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val isTracking = state is ArSessionState.Active && state.trackingState == TrackingState.TRACKING
+
+    Canvas(modifier = modifier) {
+        val center = Offset(size.width / 2f, size.height / 2f)
+
+        if (!isTracking) {
+            // State: Invalid Target / Paused (Dimmed amber ring with cross)
+            val ringRadius = 14.dp.toPx()
+            drawCircle(
+                color = Color(0xFFFFA726).copy(alpha = 0.5f),
+                radius = ringRadius,
+                center = center,
+                style = Stroke(width = 1.5.dp.toPx())
+            )
+            val crossSize = 5.dp.toPx()
+            drawLine(
+                color = Color(0xFFFFA726).copy(alpha = 0.7f),
+                start = Offset(center.x - crossSize, center.y - crossSize),
+                end = Offset(center.x + crossSize, center.y + crossSize),
+                strokeWidth = 1.5.dp.toPx()
+            )
+            drawLine(
+                color = Color(0xFFFFA726).copy(alpha = 0.7f),
+                start = Offset(center.x - crossSize, center.y + crossSize),
+                end = Offset(center.x + crossSize, center.y - crossSize),
+                strokeWidth = 1.5.dp.toPx()
+            )
+        } else if (isAimingAtSurface) {
+            // State: Surface Detected & Aimed At (◎ Focused Concentric Rings with Glowing Center Dot)
+            val outerRadius = 20.dp.toPx()
+            val innerRadius = 12.dp.toPx()
+            val dotRadius = 3.5.dp.toPx()
+
+            // Outer target ring
+            drawCircle(
+                color = Color(0xFF00E5FF).copy(alpha = 0.85f),
+                radius = outerRadius,
+                center = center,
+                style = Stroke(width = 2.dp.toPx())
+            )
+
+            // Inner subtle guide ring
+            drawCircle(
+                color = Color.White.copy(alpha = 0.4f),
+                radius = innerRadius,
+                center = center,
+                style = Stroke(width = 1.dp.toPx())
+            )
+
+            // Center targeting dot
+            drawCircle(
+                color = Color(0xFF00E5FF),
+                radius = dotRadius,
+                center = center
+            )
+
+            // 4 Focus tick marks
+            val tickLength = 4.dp.toPx()
+            val tickOffset = outerRadius + 2.dp.toPx()
+            drawLine(Color(0xFF00E5FF), Offset(center.x, center.y - tickOffset), Offset(center.x, center.y - tickOffset - tickLength), 2.dp.toPx())
+            drawLine(Color(0xFF00E5FF), Offset(center.x, center.y + tickOffset), Offset(center.x, center.y + tickOffset + tickLength), 2.dp.toPx())
+            drawLine(Color(0xFF00E5FF), Offset(center.x - tickOffset, center.y), Offset(center.x - tickOffset - tickLength, center.y), 2.dp.toPx())
+            drawLine(Color(0xFF00E5FF), Offset(center.x + tickOffset, center.y), Offset(center.x + tickOffset + tickLength, center.y), 2.dp.toPx())
+        } else {
+            // State: Idle / Scanning (+ Crosshair with clean subtle ring)
+            val ringRadius = 14.dp.toPx()
+            drawCircle(
+                color = Color.White.copy(alpha = 0.65f),
+                radius = ringRadius,
+                center = center,
+                style = Stroke(width = 1.5.dp.toPx())
+            )
+
+            // Tiny center pip
+            drawCircle(
+                color = Color.White.copy(alpha = 0.85f),
+                radius = 1.8.dp.toPx(),
+                center = center
+            )
+
+            // Subtle crosshair ticks
+            val tickStart = ringRadius + 2.dp.toPx()
+            val tickLength = 4.dp.toPx()
+            drawLine(Color.White.copy(alpha = 0.65f), Offset(center.x, center.y - tickStart), Offset(center.x, center.y - tickStart - tickLength), 1.5.dp.toPx())
+            drawLine(Color.White.copy(alpha = 0.65f), Offset(center.x, center.y + tickStart), Offset(center.x, center.y + tickStart + tickLength), 1.5.dp.toPx())
+            drawLine(Color.White.copy(alpha = 0.65f), Offset(center.x - tickStart, center.y), Offset(center.x - tickStart - tickLength, center.y), 1.5.dp.toPx())
+            drawLine(Color.White.copy(alpha = 0.65f), Offset(center.x + tickStart, center.y), Offset(center.x + tickStart + tickLength, center.y), 1.5.dp.toPx())
+        }
+    }
+}
+
+/**
+ * Step 3: Contextual instructional feedback banner.
+ * Communicates scanning tips and surface targeting confirmation.
+ */
+@Composable
+fun ArSurfaceFeedbackBanner(
+    hasDetectedSurface: Boolean,
+    isAimingAtSurface: Boolean,
+    activePlaneCount: Int,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = if (isAimingAtSurface) Color(0xF20B1120) else Color(0xD90B1120),
+        border = BorderStroke(
+            1.dp,
+            if (isAimingAtSurface) Color(0xFF00E5FF).copy(alpha = 0.7f) else Color(0x33FFFFFF)
+        ),
+        contentColor = Color.White,
+        tonalElevation = 6.dp,
+        modifier = modifier
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
+        ) {
+            if (isAimingAtSurface) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF00E5FF))
+                )
+                Column {
+                    Text(
+                        text = stringResource(R.string.feedback_surface_detected),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = stringResource(R.string.feedback_tap_to_place),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF80D8FF)
+                    )
+                }
+            } else if (hasDetectedSurface) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF10B981))
+                )
+                Text(
+                    text = stringResource(R.string.feedback_surface_detected),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
+                )
+                Text(
+                    text = "(${activePlaneCount} tracked)",
+                    fontSize = 11.sp,
+                    color = Color(0xFF94A3B8)
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFF59E0B))
+                )
+                Text(
+                    text = stringResource(R.string.feedback_scan_prompt),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Normal,
+                    color = Color(0xFFE2E8F0)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Step 3: Clean bottom interaction area with active surface telemetry.
+ */
+@Composable
+fun ArBottomSurfaceBar(
+    planesTelemetry: PlanesTelemetry,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = Color(0xE60B1120),
+        border = BorderStroke(1.dp, Color(0x33FFFFFF)),
+        contentColor = Color.White,
+        tonalElevation = 8.dp,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = Color(0xFF1E293B),
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Layers,
+                            contentDescription = null,
+                            tint = Color(0xFF38BDF8),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                Column {
+                    Text(
+                        text = stringResource(R.string.feedback_surface_active),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = "Detecting floors, tables and walls",
+                        fontSize = 11.sp,
+                        color = Color(0xFF94A3B8)
+                    )
+                }
+            }
+
+            // Surface Count Indicators
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (planesTelemetry.horizontalPlaneCount > 0) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF0F2B48),
+                        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f))
+                    ) {
+                        Text(
+                            text = "Floor: ${planesTelemetry.horizontalPlaneCount}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF7DD3FC),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                if (planesTelemetry.verticalPlaneCount > 0) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF2E1B4E),
+                        border = BorderStroke(1.dp, Color(0xFFA78BFA).copy(alpha = 0.5f))
+                    ) {
+                        Text(
+                            text = "Wall: ${planesTelemetry.verticalPlaneCount}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFFC4B5FD),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                if (planesTelemetry.activePlaneCount == 0) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF261D11),
+                        border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.4f))
+                    ) {
+                        Text(
+                            text = "Scanning...",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Normal,
+                            color = Color(0xFFFDE68A),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Step 3: Settings & Diagnostics Modal Bottom Sheet.
+ * Provides access to detailed plane metrics, 6-DoF pose telemetry, and dev HUD toggle.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ArSettingsDiagnosticsSheet(
+    pose: CameraPoseData,
+    planesTelemetry: PlanesTelemetry,
+    showHudOnScreen: Boolean,
+    onToggleHudOnScreen: (Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xFF0F172A),
+        contentColor = Color.White,
+        tonalElevation = 8.dp,
+        modifier = Modifier.testTag("ar_diagnostics_sheet")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+        ) {
+            // Header
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_title),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close",
+                        tint = Color.White.copy(alpha = 0.7f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Section 1: Surface Detection (ARCore Planes)
+            Text(
+                text = stringResource(R.string.settings_section_surface),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF38BDF8),
+                letterSpacing = 1.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                MetricCard(
+                    title = "Total",
+                    value = "${planesTelemetry.activePlaneCount}",
+                    modifier = Modifier.weight(1f)
+                )
+                MetricCard(
+                    title = "Horizontal",
+                    value = "${planesTelemetry.horizontalPlaneCount}",
+                    modifier = Modifier.weight(1f)
+                )
+                MetricCard(
+                    title = "Vertical",
+                    value = "${planesTelemetry.verticalPlaneCount}",
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            if (planesTelemetry.planes.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(140.dp)
+                ) {
+                    items(planesTelemetry.planes) { plane ->
+                        PlaneItemRow(plane = plane)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Section 2: Motion Tracking (6-DoF Telemetry)
+            Text(
+                text = stringResource(R.string.settings_section_motion),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFA78BFA),
+                letterSpacing = 1.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                MetricCard(
+                    title = "Pos (X, Y, Z)",
+                    value = String.format(Locale.US, "%.2f, %.2f, %.2f", pose.translationX, pose.translationY, pose.translationZ),
+                    modifier = Modifier.weight(1.5f)
+                )
+                MetricCard(
+                    title = "Pitch / Yaw",
+                    value = String.format(Locale.US, "%.1f° / %.1f°", pose.pitch, pose.yaw),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Section 3: Developer Options
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column {
+                    Text(
+                        text = stringResource(R.string.settings_overlay_toggle),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White
+                    )
+                    Text(
+                        text = "Real-time position and rotation HUD on camera screen",
+                        fontSize = 11.sp,
+                        color = Color(0xFF94A3B8)
+                    )
+                }
+
+                Switch(
+                    checked = showHudOnScreen,
+                    onCheckedChange = onToggleHudOnScreen,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = Color(0xFF38BDF8)
+                    ),
+                    modifier = Modifier.testTag("ar_hud_toggle")
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.settings_close))
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun MetricCard(
+    title: String,
+    value: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF1E293B),
+        border = BorderStroke(1.dp, Color(0x26FFFFFF)),
+        modifier = modifier
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Text(
+                text = title,
+                fontSize = 10.sp,
+                color = Color(0xFF94A3B8)
+            )
+            Text(
+                text = value,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                color = Color.White
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlaneItemRow(plane: DetectedPlaneData) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = Color(0xFF1E293B).copy(alpha = 0.6f),
+        border = BorderStroke(1.dp, Color(0x1AFFFFFF)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(if (plane.type.isHorizontal) Color(0xFF38BDF8) else Color(0xFFA78BFA))
+                )
+                Text(
+                    text = plane.type.displayName,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     color = Color.White
                 )
             }
+
+            Text(
+                text = String.format(Locale.US, "%.2f × %.2f m  (%.2f m)", plane.extentX, plane.extentZ, plane.distanceFromCamera),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                color = Color(0xFF94A3B8)
+            )
         }
     }
 }
@@ -348,13 +986,13 @@ fun CameraPermissionRequiredScreen(
                 Icon(
                     imageVector = Icons.Default.CameraAlt,
                     contentDescription = stringResource(R.string.grant_permission_button),
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(56.dp)
+                    modifier = Modifier.size(56.dp),
+                    tint = MaterialTheme.colorScheme.primary
                 )
 
                 Text(
                     text = stringResource(R.string.camera_permission_required_title),
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center
                 )
@@ -365,8 +1003,6 @@ fun CameraPermissionRequiredScreen(
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-
-                Spacer(modifier = Modifier.height(8.dp))
 
                 Button(
                     onClick = onRequestPermission,
@@ -382,7 +1018,47 @@ fun CameraPermissionRequiredScreen(
 }
 
 /**
- * Overlay shown when ARCore cannot run or encounters an error.
+ * Overlay shown when ARCore installation is requested.
+ */
+@Composable
+fun ArInstallPromptOverlay(
+    onInstall: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(20.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Info,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(36.dp)
+            )
+            Text(
+                text = stringResource(R.string.arcore_installing),
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center
+            )
+            Button(
+                onClick = onInstall,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(text = stringResource(R.string.retry_button))
+            }
+        }
+    }
+}
+
+/**
+ * Overlay shown when an AR error or unsupported device state occurs.
  */
 @Composable
 fun ArErrorOverlay(
@@ -390,56 +1066,45 @@ fun ArErrorOverlay(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val canRetry = (state as? ArSessionState.Error)?.canRetry ?: (state !is ArSessionState.UnsupportedDevice)
-
     Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer
-        ),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
         shape = RoundedCornerShape(16.dp),
-        modifier = modifier
-            .fillMaxWidth()
-            .testTag("ar_error_card")
+        modifier = modifier.fillMaxWidth()
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(16.dp)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(20.dp)
         ) {
             Icon(
                 imageVector = Icons.Default.Warning,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.error,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.size(36.dp)
             )
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                val errorText = when (state) {
-                    is ArSessionState.UnsupportedDevice -> stringResource(R.string.arcore_not_supported)
-                    is ArSessionState.Error -> state.message
-                    else -> stringResource(R.string.arcore_not_supported)
-                }
-                Text(
-                    text = errorText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onErrorContainer
-                )
+            val message = when (state) {
+                is ArSessionState.UnsupportedDevice -> stringResource(R.string.arcore_not_supported)
+                is ArSessionState.Error -> state.message
+                else -> stringResource(R.string.arcore_not_supported)
             }
-
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+            val canRetry = (state as? ArSessionState.Error)?.canRetry ?: false
             if (canRetry) {
-                Spacer(modifier = Modifier.width(8.dp))
-
                 OutlinedButton(
                     onClick = onRetry,
-                    modifier = Modifier.testTag("retry_button")
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(
                         imageVector = Icons.Default.Refresh,
-                        contentDescription = stringResource(R.string.retry_button),
-                        modifier = Modifier.size(16.dp)
+                        contentDescription = stringResource(R.string.retry_button)
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(text = stringResource(R.string.retry_button))
                 }
             }
@@ -448,75 +1113,15 @@ fun ArErrorOverlay(
 }
 
 /**
- * Overlay shown when Google Play Services for AR installation or update is required.
- */
-@Composable
-fun ArInstallPromptOverlay(
-    onInstall: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer
-        ),
-        shape = RoundedCornerShape(16.dp),
-        modifier = modifier
-            .fillMaxWidth()
-            .testTag("ar_install_card")
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Info,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.size(32.dp)
-            )
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.arcore_installing),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            Button(
-                onClick = onInstall,
-                modifier = Modifier.testTag("install_button")
-            ) {
-                Text(text = "Install")
-            }
-        }
-    }
-}
-
-@Composable
-private fun formatFailureReason(reason: TrackingFailureReason): String {
-    return when (reason) {
-        TrackingFailureReason.NONE -> stringResource(R.string.tracking_reason_none)
-        TrackingFailureReason.BAD_STATE -> stringResource(R.string.tracking_reason_bad_state)
-        TrackingFailureReason.INSUFFICIENT_LIGHT -> stringResource(R.string.tracking_reason_insufficient_light)
-        TrackingFailureReason.EXCESSIVE_MOTION -> stringResource(R.string.tracking_reason_motion)
-        TrackingFailureReason.INSUFFICIENT_FEATURES -> stringResource(R.string.tracking_reason_features)
-        TrackingFailureReason.CAMERA_UNAVAILABLE -> "Camera unavailable"
-    }
-}
-
-/**
- * Step 2: Minimal Development / Debug Overlay for Motion Tracking.
+ * Step 2: Development / Debug Overlay for Motion Tracking.
  * Displays Tracking State, Camera Position (X, Y, Z), and Camera Orientation.
  */
 @Composable
 fun ArMotionDebugOverlay(
     state: ArSessionState,
     pose: CameraPoseData,
+    planesTelemetry: PlanesTelemetry? = null,
+    onClose: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var isExpanded by remember { mutableStateOf(true) }
@@ -527,11 +1132,9 @@ fun ArMotionDebugOverlay(
         else -> TrackingState.STOPPED to TrackingFailureReason.NONE
     }
 
-    val isTracking = trackingState == TrackingState.TRACKING
-
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = Color.Black.copy(alpha = 0.82f),
+        color = Color.Black.copy(alpha = 0.85f),
         contentColor = Color.White,
         tonalElevation = 8.dp,
         modifier = modifier
@@ -574,7 +1177,6 @@ fun ArMotionDebugOverlay(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    // Tracking State Badge
                     val badgeColor = when (trackingState) {
                         TrackingState.TRACKING -> Color(0xFF4CAF50)
                         TrackingState.PAUSED -> Color(0xFFFFB300)
@@ -612,6 +1214,20 @@ fun ArMotionDebugOverlay(
                             tint = Color.White.copy(alpha = 0.7f),
                             modifier = Modifier.size(20.dp)
                         )
+                    }
+
+                    if (onClose != null) {
+                        IconButton(
+                            onClick = onClose,
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close HUD",
+                                tint = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -719,6 +1335,17 @@ fun ArMotionDebugOverlay(
                             label = "Roll",
                             value = String.format(Locale.US, "%+5.1f°", pose.roll),
                             testTag = "camera_pose_roll"
+                        )
+                    }
+
+                    if (planesTelemetry != null) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "SURFACES TRACKED: ${planesTelemetry.activePlaneCount} (H: ${planesTelemetry.horizontalPlaneCount}, V: ${planesTelemetry.verticalPlaneCount})",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF80DEEA),
+                            letterSpacing = 0.5.sp
                         )
                     }
 

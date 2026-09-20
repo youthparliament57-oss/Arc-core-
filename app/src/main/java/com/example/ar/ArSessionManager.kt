@@ -34,6 +34,9 @@ class ArSessionManager(private val activity: Activity) {
     private val _cameraPose = MutableStateFlow(CameraPoseData.INITIAL)
     val cameraPose: StateFlow<CameraPoseData> = _cameraPose.asStateFlow()
 
+    private val _planesTelemetry = MutableStateFlow(PlanesTelemetry.EMPTY)
+    val planesTelemetry: StateFlow<PlanesTelemetry> = _planesTelemetry.asStateFlow()
+
     var session: Session? = null
         private set
 
@@ -144,8 +147,8 @@ class ArSessionManager(private val activity: Activity) {
                 val newSession = Session(activity)
                 val config = Config(newSession).apply {
                     updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
-                    // STEP 1 SCOPE: Plane finding, depth and extra engines explicitly disabled
-                    planeFindingMode = Config.PlaneFindingMode.DISABLED
+                    // STEP 3 SCOPE: Plane finding enabled for horizontal (floors/tables) and vertical (walls) surfaces
+                    planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                     lightEstimationMode = Config.LightEstimationMode.DISABLED
                     depthMode = Config.DepthMode.DISABLED
                 }
@@ -242,6 +245,10 @@ class ArSessionManager(private val activity: Activity) {
             failureReason = reason,
             pose = _cameraPose.value
         )
+    }
+
+    fun updatePlanesTelemetry(telemetry: PlanesTelemetry) {
+        _planesTelemetry.value = telemetry
     }
 
     fun reportError(message: String) {

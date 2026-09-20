@@ -23,4 +23,22 @@
     <string name="debug_tracking_paused">PAUSED</string>
     <string name="debug_tracking_stopped">STOPPED</string>
     <string name="retry_button">Retry</string>
+    <string name="status_ar_tracking">Tracking</string>
+    <string name="status_ar_searching">Searching environment</string>
+    <string name="status_ar_limited">Tracking limited</string>
+    <string name="status_ar_unavailable">AR unavailable</string>
+    <string name="feedback_scan_prompt">Move your phone slowly to scan the environment.</string>
+    <string name="feedback_surface_detected">Surface detected</string>
+    <string name="feedback_tap_to_place">Tap to place</string>
+    <string name="feedback_surface_active">Surface detection active</string>
+    <string name="feedback_horizontal_tag">Floor / Table</string>
+    <string name="feedback_vertical_tag">Wall / Door</string>
+    <string name="settings_title">AR Diagnostics &amp; Settings</string>
+    <string name="settings_section_surface">Detected Surfaces</string>
+    <string name="settings_section_motion">Motion Tracking (6-DoF)</string>
+    <string name="settings_detected_planes_count">Total Surfaces: %1$d</string>
+    <string name="settings_horizontal_planes">Horizontal (Floor/Table): %1$d</string>
+    <string name="settings_vertical_planes">Vertical (Wall/Door): %1$d</string>
+    <string name="settings_overlay_toggle">Show Real-Time Telemetry HUD</string>
+    <string name="settings_close">Done</string>
 </resources>
