@@ -13,8 +13,8 @@ class DetectedPlaneDataTest {
         assertTrue(PlaneType.HORIZONTAL_UPWARD.isHorizontal)
         assertTrue(PlaneType.HORIZONTAL_DOWNWARD.isHorizontal)
         assertFalse(PlaneType.VERTICAL.isHorizontal)
-        assertEquals("Horizontal (Floor/Table)", PlaneType.HORIZONTAL_UPWARD.displayName)
-        assertEquals("Vertical (Wall/Door)", PlaneType.VERTICAL.displayName)
+        assertEquals("Horizontal Surface", PlaneType.HORIZONTAL_UPWARD.displayName)
+        assertEquals("Vertical Surface", PlaneType.VERTICAL.displayName)
     }
 
     @Test

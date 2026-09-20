@@ -145,8 +145,10 @@ class PlaneRenderer {
             val isValidated = validatedPlaneHashCodes.contains(planeHash)
             val isTargeted = planeHash == targetedPlaneHashCode
 
-            // If not validated and debug visualization not requested, skip to eliminate visual clutter
-            if (!isValidated && !showUnvalidatedPlanes) {
+            // Reticle-Centric Rule: Only the currently targeted validated plane is rendered in the user-facing view.
+            // Non-targeted planes are NOT rendered with fill or grid.
+            // When showUnvalidatedPlanes debug flag is enabled, candidate planes are shown with faint outlines.
+            if (!isTargeted && !showUnvalidatedPlanes) {
                 continue
             }
 
@@ -158,33 +160,33 @@ class PlaneRenderer {
             val pointCount = polygon.remaining() / 2
             val isVertical = plane.type == Plane.Type.VERTICAL
 
-            // Determine appropriate style based on validation and reticle targeting
+            // Determine appropriate style: ONLY the targeted validated plane gets full fill, grid, and highlight.
             val fillColor: FloatArray
             val gridColor: FloatArray
             val lineColor: FloatArray
             val lineWidth: Float
             val drawFillAndGrid: Boolean
+            val drawPerimeter: Boolean
 
-            if (isValidated) {
+            if (isTargeted && isValidated) {
+                // Primary Reticle Target: Prominent highlight with translucent fill, grid, and boundary
                 drawFillAndGrid = true
-                if (isTargeted) {
-                    fillColor = if (isVertical) verticalTargetedFillColor else horizontalTargetedFillColor
-                    gridColor = if (isVertical) verticalTargetedGridColor else horizontalTargetedGridColor
-                    lineColor = if (isVertical) verticalTargetedLineColor else horizontalTargetedLineColor
-                    lineWidth = 3.5f
-                } else {
-                    fillColor = if (isVertical) verticalFillColor else horizontalFillColor
-                    gridColor = if (isVertical) verticalGridColor else horizontalGridColor
-                    lineColor = if (isVertical) verticalLineColor else horizontalLineColor
-                    lineWidth = 2.0f
-                }
-            } else {
-                // Unvalidated candidate (developer debug mode only): Faint subtle outline, no fill or grid
+                drawPerimeter = true
+                fillColor = if (isVertical) verticalTargetedFillColor else horizontalTargetedFillColor
+                gridColor = if (isVertical) verticalTargetedGridColor else horizontalTargetedGridColor
+                lineColor = if (isVertical) verticalTargetedLineColor else horizontalTargetedLineColor
+                lineWidth = 3.5f
+            } else if (showUnvalidatedPlanes) {
+                // Developer Debug Mode Only: Faint subtle outline without fill or grid
                 drawFillAndGrid = false
+                drawPerimeter = true
                 fillColor = horizontalFillColor
                 gridColor = horizontalGridColor
-                lineColor = unvalidatedLineColor
+                lineColor = if (isValidated) horizontalLineColor else unvalidatedLineColor
                 lineWidth = 1.0f
+            } else {
+                // Non-targeted plane in normal user mode: Do not render
+                continue
             }
 
             // Build Model-View-Projection matrix for this plane
@@ -248,25 +250,27 @@ class PlaneRenderer {
             }
 
             // --- 2. Draw Perimeter Boundary Line ---
-            GLES20.glUseProgram(lineProgram)
-            GLES20.glUniformMatrix4fv(lineMvpUniform, 1, false, modelViewProjectionMatrix, 0)
-            GLES20.glUniform4fv(lineColorUniform, 1, lineColor, 0)
+            if (drawPerimeter) {
+                GLES20.glUseProgram(lineProgram)
+                GLES20.glUniformMatrix4fv(lineMvpUniform, 1, false, modelViewProjectionMatrix, 0)
+                GLES20.glUniform4fv(lineColorUniform, 1, lineColor, 0)
 
-            // Offset buffer to skip the center vertex (1 vertex * 3 floats * 4 bytes = 12 bytes)
-            buffer.position(3)
-            GLES20.glEnableVertexAttribArray(linePositionAttrib)
-            GLES20.glVertexAttribPointer(
-                linePositionAttrib,
-                3,
-                GLES20.GL_FLOAT,
-                false,
-                3 * FLOAT_SIZE,
-                buffer
-            )
+                // Offset buffer to skip the center vertex (1 vertex * 3 floats * 4 bytes = 12 bytes)
+                buffer.position(3)
+                GLES20.glEnableVertexAttribArray(linePositionAttrib)
+                GLES20.glVertexAttribPointer(
+                    linePositionAttrib,
+                    3,
+                    GLES20.GL_FLOAT,
+                    false,
+                    3 * FLOAT_SIZE,
+                    buffer
+                )
 
-            GLES20.glLineWidth(lineWidth)
-            GLES20.glDrawArrays(GLES20.GL_LINE_LOOP, 0, pointCount)
-            GLES20.glDisableVertexAttribArray(linePositionAttrib)
+                GLES20.glLineWidth(lineWidth)
+                GLES20.glDrawArrays(GLES20.GL_LINE_LOOP, 0, pointCount)
+                GLES20.glDisableVertexAttribArray(linePositionAttrib)
+            }
         }
 
         // Restore OpenGL state

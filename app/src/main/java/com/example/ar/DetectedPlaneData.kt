@@ -15,9 +15,9 @@ enum class PlaneType {
 
     val displayName: String
         get() = when (this) {
-            HORIZONTAL_UPWARD -> "Horizontal (Floor/Table)"
-            HORIZONTAL_DOWNWARD -> "Horizontal (Ceiling)"
-            VERTICAL -> "Vertical (Wall/Door)"
+            HORIZONTAL_UPWARD -> "Horizontal Surface"
+            HORIZONTAL_DOWNWARD -> "Ceiling Surface"
+            VERTICAL -> "Vertical Surface"
             UNKNOWN -> "Surface"
         }
 

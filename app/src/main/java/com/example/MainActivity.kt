@@ -383,20 +383,42 @@ fun ArTopBar(
                     color = Color.White
                 )
 
-                if (planesTelemetry.hasValidatedSurface) {
-                    Text(
-                        text = "• ${planesTelemetry.validatedSurfaceCount} usable surface${if (planesTelemetry.validatedSurfaceCount > 1) "s" else ""}",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFF38BDF8)
-                    )
-                } else if (planesTelemetry.rawPlaneCount > 0) {
-                    Text(
-                        text = "• Scanning…",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Normal,
-                        color = Color(0xFFF59E0B)
-                    )
+                // Reticle-centric user status: Indicate current targeting readiness without exposing raw/global plane counts
+                when (planesTelemetry.reticleTargetState) {
+                    ReticleTargetState.VALID_SURFACE -> {
+                        Text(
+                            text = "• Target locked",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF00E5FF)
+                        )
+                    }
+                    ReticleTargetState.ANALYZING_SURFACE -> {
+                        Text(
+                            text = "• Analyzing…",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFFF59E0B)
+                        )
+                    }
+                    ReticleTargetState.SEARCHING -> {
+                        // In normal mode, provide subtle guidance when no target is focused
+                        if (planesTelemetry.hasValidatedSurface) {
+                            Text(
+                                text = "• Aim at surface",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Normal,
+                                color = Color(0xFF94A3B8)
+                            )
+                        } else {
+                            Text(
+                                text = "• Scanning…",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Normal,
+                                color = Color(0xFFF59E0B)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -721,10 +743,10 @@ fun ArBottomSurfaceBar(
                         color = Color.White
                     )
                     Text(
-                        text = if (planesTelemetry.hasValidatedSurface) {
-                            "${planesTelemetry.validatedSurfaceCount} validated surface${if (planesTelemetry.validatedSurfaceCount > 1) "s" else ""} (${planesTelemetry.rawPlaneCount} raw planes)"
-                        } else {
-                            "Detecting floors, tables and walls (${planesTelemetry.rawPlaneCount} raw)"
+                        text = when (planesTelemetry.reticleTargetState) {
+                            ReticleTargetState.VALID_SURFACE -> "Surface targeted — Ready for placement"
+                            ReticleTargetState.ANALYZING_SURFACE -> "Analyzing surface stability…"
+                            ReticleTargetState.SEARCHING -> "Point reticle at a detected surface"
                         },
                         fontSize = 11.sp,
                         color = Color(0xFF94A3B8)
@@ -744,7 +766,7 @@ fun ArBottomSurfaceBar(
                         border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f))
                     ) {
                         Text(
-                            text = "Floor: ${planesTelemetry.validatedHorizontalCount}",
+                            text = "Horizontal: ${planesTelemetry.validatedHorizontalCount}",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
                             color = Color(0xFF7DD3FC),
@@ -760,7 +782,7 @@ fun ArBottomSurfaceBar(
                         border = BorderStroke(1.dp, Color(0xFFA78BFA).copy(alpha = 0.5f))
                     ) {
                         Text(
-                            text = "Wall: ${planesTelemetry.validatedVerticalCount}",
+                            text = "Vertical: ${planesTelemetry.validatedVerticalCount}",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
                             color = Color(0xFFC4B5FD),
@@ -871,7 +893,7 @@ fun ArSettingsDiagnosticsSheet(
                     modifier = Modifier.weight(1f)
                 )
                 MetricCard(
-                    title = "Floors / Walls",
+                    title = "Horiz / Vert",
                     value = "${planesTelemetry.validatedHorizontalCount} / ${planesTelemetry.validatedVerticalCount}",
                     modifier = Modifier.weight(1.2f)
                 )
