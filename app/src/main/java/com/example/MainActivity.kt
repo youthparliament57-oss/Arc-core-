@@ -183,19 +183,31 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // Error / Unsupported Dialog State
-                        if (sessionState is ArSessionState.UnsupportedDevice ||
-                            sessionState is ArSessionState.Error
-                        ) {
-                            ArErrorOverlay(
-                                state = sessionState,
-                                onRetry = {
-                                    surfaceView?.let { arSessionManager.resumeSession(it) }
-                                },
-                                modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .padding(16.dp)
-                            )
+                        // Error / Unsupported / Install Dialog State
+                        when (val state = sessionState) {
+                            is ArSessionState.UnsupportedDevice,
+                            is ArSessionState.Error -> {
+                                ArErrorOverlay(
+                                    state = state,
+                                    onRetry = {
+                                        surfaceView?.let { arSessionManager.resumeSession(it) }
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .padding(16.dp)
+                                )
+                            }
+                            is ArSessionState.ArCoreInstallRequired -> {
+                                ArInstallPromptOverlay(
+                                    onInstall = {
+                                        surfaceView?.let { arSessionManager.resumeSession(it) }
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .padding(16.dp)
+                                )
+                            }
+                            else -> {}
                         }
                     }
                 }
@@ -356,6 +368,8 @@ fun ArErrorOverlay(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val canRetry = (state as? ArSessionState.Error)?.canRetry ?: (state !is ArSessionState.UnsupportedDevice)
+
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.errorContainer
@@ -391,19 +405,71 @@ fun ArErrorOverlay(
                 )
             }
 
+            if (canRetry) {
+                Spacer(modifier = Modifier.width(8.dp))
+
+                OutlinedButton(
+                    onClick = onRetry,
+                    modifier = Modifier.testTag("retry_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = stringResource(R.string.retry_button),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(text = stringResource(R.string.retry_button))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Overlay shown when Google Play Services for AR installation or update is required.
+ */
+@Composable
+fun ArInstallPromptOverlay(
+    onInstall: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        ),
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("ar_install_card")
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Info,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(32.dp)
+            )
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.arcore_installing),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+
             Spacer(modifier = Modifier.width(8.dp))
 
-            OutlinedButton(
-                onClick = onRetry,
-                modifier = Modifier.testTag("retry_button")
+            Button(
+                onClick = onInstall,
+                modifier = Modifier.testTag("install_button")
             ) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = stringResource(R.string.retry_button),
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(text = stringResource(R.string.retry_button))
+                Text(text = "Install")
             }
         }
     }

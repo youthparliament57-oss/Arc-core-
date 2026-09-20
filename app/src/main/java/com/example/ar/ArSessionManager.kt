@@ -1,6 +1,10 @@
 package com.example.ar
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.util.Log
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
@@ -8,10 +12,12 @@ import com.google.ar.core.Session
 import com.google.ar.core.TrackingFailureReason
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.CameraNotAvailableException
+import com.google.ar.core.exceptions.FatalException
 import com.google.ar.core.exceptions.UnavailableApkTooOldException
 import com.google.ar.core.exceptions.UnavailableArcoreNotInstalledException
 import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException
 import com.google.ar.core.exceptions.UnavailableSdkTooOldException
+import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +35,35 @@ class ArSessionManager(private val activity: Activity) {
         private set
 
     private var userRequestedInstall = false
+
+    /**
+     * Checks if Google Play Services for AR (com.google.ar.core) is installed.
+     */
+    fun isArCoreInstalled(): Boolean {
+        return try {
+            activity.packageManager.getPackageInfo("com.google.ar.core", 0)
+            true
+        } catch (e: PackageManager.NameNotFoundException) {
+            false
+        }
+    }
+
+    /**
+     * Checks whether Google Play Store or an application that can handle
+     * `market://details?id=com.google.ar.core` is available on this device.
+     */
+    fun canLaunchInstaller(): Boolean {
+        val pm = activity.packageManager
+        val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.google.ar.core"))
+        val hasMarketHandler = marketIntent.resolveActivity(pm) != null
+        val hasPlayStore = try {
+            pm.getPackageInfo("com.android.vending", 0)
+            true
+        } catch (e: Exception) {
+            false
+        }
+        return hasMarketHandler || hasPlayStore
+    }
 
     /**
      * Verifies ARCore availability on this device.
@@ -53,8 +88,16 @@ class ArSessionManager(private val activity: Activity) {
             }
             ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED,
             ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD -> {
-                _sessionState.value = ArSessionState.ArCoreInstallRequired
-                onResult(true)
+                if (canLaunchInstaller()) {
+                    _sessionState.value = ArSessionState.ArCoreInstallRequired
+                    onResult(true)
+                } else {
+                    _sessionState.value = ArSessionState.Error(
+                        message = "Google Play Services for AR is required, but Google Play Store is not available on this device.",
+                        canRetry = false
+                    )
+                    onResult(false)
+                }
             }
             ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE -> {
                 _sessionState.value = ArSessionState.UnsupportedDevice
@@ -74,6 +117,18 @@ class ArSessionManager(private val activity: Activity) {
         var installResult: ArCoreApk.InstallStatus = ArCoreApk.InstallStatus.INSTALLED
         try {
             if (session == null) {
+                // If ARCore is not installed on this device, check if installer is available
+                if (!isArCoreInstalled()) {
+                    if (!canLaunchInstaller()) {
+                        Log.w(TAG, "ARCore not installed and Google Play Store is unavailable.")
+                        _sessionState.value = ArSessionState.Error(
+                            message = "Google Play Services for AR is required, but Google Play Store is not available on this device.",
+                            canRetry = false
+                        )
+                        return
+                    }
+                }
+
                 // Request ARCore installation if required
                 installResult = ArCoreApk.getInstance().requestInstall(activity, !userRequestedInstall)
                 if (installResult == ArCoreApk.InstallStatus.INSTALL_REQUESTED) {
@@ -103,22 +158,40 @@ class ArSessionManager(private val activity: Activity) {
                 failureReason = TrackingFailureReason.NONE
             )
         } catch (e: UnavailableArcoreNotInstalledException) {
-            Log.e(TAG, "ARCore not installed", e)
+            Log.w(TAG, "ARCore not installed", e)
             _sessionState.value = ArSessionState.ArCoreInstallRequired
+        } catch (e: UnavailableUserDeclinedInstallationException) {
+            Log.w(TAG, "User declined ARCore installation", e)
+            _sessionState.value = ArSessionState.Error(
+                message = "Google Play Services for AR installation was declined. AR features cannot run without it.",
+                canRetry = true
+            )
+        } catch (e: FatalException) {
+            Log.w(TAG, "ARCore installer could not be launched", e)
+            _sessionState.value = ArSessionState.Error(
+                message = "Google Play Services for AR is required, but could not be launched. Please run on an ARCore-supported physical device.",
+                canRetry = false
+            )
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "No activity found to handle ARCore installation intent", e)
+            _sessionState.value = ArSessionState.Error(
+                message = "Google Play Store is not available to install Google Play Services for AR.",
+                canRetry = false
+            )
         } catch (e: UnavailableApkTooOldException) {
-            Log.e(TAG, "ARCore APK too old", e)
+            Log.w(TAG, "ARCore APK too old", e)
             _sessionState.value = ArSessionState.Error("Google Play Services for AR must be updated.")
         } catch (e: UnavailableSdkTooOldException) {
-            Log.e(TAG, "App SDK too old for ARCore", e)
+            Log.w(TAG, "App SDK too old for ARCore", e)
             _sessionState.value = ArSessionState.Error("App update required to run AR.")
         } catch (e: UnavailableDeviceNotCompatibleException) {
-            Log.e(TAG, "Device not compatible with ARCore", e)
+            Log.w(TAG, "Device not compatible with ARCore", e)
             _sessionState.value = ArSessionState.UnsupportedDevice
         } catch (e: CameraNotAvailableException) {
-            Log.e(TAG, "Camera not available", e)
+            Log.w(TAG, "Camera not available", e)
             _sessionState.value = ArSessionState.Error("Camera unavailable. Another app may be using the camera.")
         } catch (e: SecurityException) {
-            Log.e(TAG, "Camera permission missing", e)
+            Log.w(TAG, "Camera permission missing", e)
             _sessionState.value = ArSessionState.PermissionRequired
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected error resuming AR session", e)
