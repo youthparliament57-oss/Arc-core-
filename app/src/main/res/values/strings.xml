@@ -16,5 +16,11 @@
     <string name="tracking_reason_insufficient_light">Insufficient light</string>
     <string name="tracking_reason_bad_state">System busy</string>
     <string name="tracking_reason_none">None</string>
+    <string name="tracking_reason_features">Insufficient visual features</string>
+    <string name="debug_title">Motion Tracking Telemetry</string>
+    <string name="debug_tracking_state">Tracking State: %1$s</string>
+    <string name="debug_tracking_normal">TRACKING</string>
+    <string name="debug_tracking_paused">PAUSED</string>
+    <string name="debug_tracking_stopped">STOPPED</string>
     <string name="retry_button">Retry</string>
 </resources>

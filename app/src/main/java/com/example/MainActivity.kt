@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,13 +30,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -54,9 +59,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -65,12 +70,15 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.ar.ArSessionManager
 import com.example.ar.ArSessionState
 import com.example.ar.ArSurfaceView
+import com.example.ar.CameraPoseData
 import com.example.ui.theme.MyApplicationTheme
 import com.google.ar.core.TrackingFailureReason
 import com.google.ar.core.TrackingState
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
@@ -86,6 +94,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MyApplicationTheme {
                 val sessionState by arSessionManager.sessionState.collectAsState()
+                val cameraPose by arSessionManager.cameraPose.collectAsState()
                 val context = LocalContext.current
                 val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -152,6 +161,9 @@ class MainActivity : ComponentActivity() {
                                 factory = { ctx ->
                                     ArSurfaceView(ctx).also { view ->
                                         surfaceView = view
+                                        view.onTrackingAndPoseUpdated = { state, reason, pose ->
+                                            arSessionManager.updateTrackingAndPose(state, reason, pose)
+                                        }
                                         view.onTrackingUpdated = { state, reason ->
                                             arSessionManager.updateTrackingState(state, reason)
                                         }
@@ -173,6 +185,16 @@ class MainActivity : ComponentActivity() {
                                     .align(Alignment.TopCenter)
                                     .statusBarsPadding()
                                     .padding(top = 16.dp)
+                            )
+
+                            // Step 2: AR Motion Tracking Development / Debug Overlay
+                            ArMotionDebugOverlay(
+                                state = sessionState,
+                                pose = cameraPose,
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .statusBarsPadding()
+                                    .padding(top = 64.dp, start = 16.dp, end = 16.dp)
                             )
                         } else {
                             // Permission Request UI
@@ -482,8 +504,274 @@ private fun formatFailureReason(reason: TrackingFailureReason): String {
         TrackingFailureReason.BAD_STATE -> stringResource(R.string.tracking_reason_bad_state)
         TrackingFailureReason.INSUFFICIENT_LIGHT -> stringResource(R.string.tracking_reason_insufficient_light)
         TrackingFailureReason.EXCESSIVE_MOTION -> stringResource(R.string.tracking_reason_motion)
-        TrackingFailureReason.INSUFFICIENT_FEATURES -> "Insufficient visual features"
+        TrackingFailureReason.INSUFFICIENT_FEATURES -> stringResource(R.string.tracking_reason_features)
         TrackingFailureReason.CAMERA_UNAVAILABLE -> "Camera unavailable"
-        else -> stringResource(R.string.tracking_reason_none)
+    }
+}
+
+/**
+ * Step 2: Minimal Development / Debug Overlay for Motion Tracking.
+ * Displays Tracking State, Camera Position (X, Y, Z), and Camera Orientation.
+ */
+@Composable
+fun ArMotionDebugOverlay(
+    state: ArSessionState,
+    pose: CameraPoseData,
+    modifier: Modifier = Modifier
+) {
+    var isExpanded by remember { mutableStateOf(true) }
+
+    val (trackingState, failureReason) = when (state) {
+        is ArSessionState.Active -> state.trackingState to state.failureReason
+        is ArSessionState.Paused -> TrackingState.PAUSED to TrackingFailureReason.NONE
+        else -> TrackingState.STOPPED to TrackingFailureReason.NONE
+    }
+
+    val isTracking = trackingState == TrackingState.TRACKING
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = Color.Black.copy(alpha = 0.82f),
+        contentColor = Color.White,
+        tonalElevation = 8.dp,
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("ar_debug_overlay")
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // Header: Title, Tracking State Badge & Expand Toggle
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when (trackingState) {
+                                    TrackingState.TRACKING -> Color(0xFF4CAF50)
+                                    TrackingState.PAUSED -> Color(0xFFFFB300)
+                                    TrackingState.STOPPED -> Color(0xFFE53935)
+                                }
+                            )
+                    )
+                    Text(
+                        text = "MOTION TRACKING",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp,
+                        color = Color.White
+                    )
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Tracking State Badge
+                    val badgeColor = when (trackingState) {
+                        TrackingState.TRACKING -> Color(0xFF4CAF50)
+                        TrackingState.PAUSED -> Color(0xFFFFB300)
+                        TrackingState.STOPPED -> Color(0xFFE53935)
+                    }
+                    val badgeLabel = when (trackingState) {
+                        TrackingState.TRACKING -> stringResource(R.string.debug_tracking_normal)
+                        TrackingState.PAUSED -> stringResource(R.string.debug_tracking_paused)
+                        TrackingState.STOPPED -> stringResource(R.string.debug_tracking_stopped)
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = badgeColor.copy(alpha = 0.25f),
+                        border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.6f))
+                    ) {
+                        Text(
+                            text = badgeLabel,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = badgeColor,
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                .testTag("ar_tracking_state_text")
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { isExpanded = !isExpanded },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = if (isExpanded) "Collapse debug info" else "Expand debug info",
+                            tint = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+
+            // Limited / Paused Warning Banner
+            if (trackingState != TrackingState.TRACKING || failureReason != TrackingFailureReason.NONE) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF332200),
+                    border = BorderStroke(1.dp, Color(0xFFFFB300).copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Color(0xFFFFB300),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        val advice = when (failureReason) {
+                            TrackingFailureReason.EXCESSIVE_MOTION -> "Device moving too fast. Move slower."
+                            TrackingFailureReason.INSUFFICIENT_LIGHT -> "Environment too dark. Move to brighter area."
+                            TrackingFailureReason.INSUFFICIENT_FEATURES -> "Point camera at textured surfaces (avoid blank walls)."
+                            TrackingFailureReason.BAD_STATE -> "System busy or sensor calibrating."
+                            TrackingFailureReason.CAMERA_UNAVAILABLE -> "Camera sensor unavailable."
+                            TrackingFailureReason.NONE -> "Tracking paused. Repositioning..."
+                        }
+                        Text(
+                            text = advice,
+                            fontSize = 11.sp,
+                            color = Color(0xFFFFE082),
+                            lineHeight = 14.sp
+                        )
+                    }
+                }
+            }
+
+            AnimatedVisibility(visible = isExpanded) {
+                Column {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.15f))
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Position (X, Y, Z in meters)
+                    Text(
+                        text = "CAMERA POSITION (METERS)",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF90CAF9),
+                        letterSpacing = 0.5.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        PoseMetricColumn(
+                            label = "X (L/R)",
+                            value = String.format(Locale.US, "%+6.3f m", pose.translationX),
+                            testTag = "camera_pose_x"
+                        )
+                        PoseMetricColumn(
+                            label = "Y (D/U)",
+                            value = String.format(Locale.US, "%+6.3f m", pose.translationY),
+                            testTag = "camera_pose_y"
+                        )
+                        PoseMetricColumn(
+                            label = "Z (F/B)",
+                            value = String.format(Locale.US, "%+6.3f m", pose.translationZ),
+                            testTag = "camera_pose_z"
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Orientation (Pitch, Yaw, Roll in degrees)
+                    Text(
+                        text = "CAMERA ORIENTATION (EULER / ROTATION)",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFB39DDB),
+                        letterSpacing = 0.5.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        PoseMetricColumn(
+                            label = "Pitch (Tilt)",
+                            value = String.format(Locale.US, "%+5.1f°", pose.pitch),
+                            testTag = "camera_pose_pitch"
+                        )
+                        PoseMetricColumn(
+                            label = "Yaw (Pan)",
+                            value = String.format(Locale.US, "%+5.1f°", pose.yaw),
+                            testTag = "camera_pose_yaw"
+                        )
+                        PoseMetricColumn(
+                            label = "Roll",
+                            value = String.format(Locale.US, "%+5.1f°", pose.roll),
+                            testTag = "camera_pose_roll"
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Quaternion & Displacement telemetry footer
+                    Row(
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = String.format(
+                                Locale.US,
+                                "Q: [%.2f, %.2f, %.2f, %.2f]",
+                                pose.qx, pose.qy, pose.qz, pose.qw
+                            ),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = Color.White.copy(alpha = 0.6f)
+                        )
+                        Text(
+                            text = String.format(Locale.US, "Dist: %.3f m", pose.distanceFromOrigin),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFA5D6A7)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PoseMetricColumn(
+    label: String,
+    value: String,
+    testTag: String
+) {
+    Column {
+        Text(
+            text = label,
+            fontSize = 10.sp,
+            color = Color.White.copy(alpha = 0.55f)
+        )
+        Text(
+            text = value,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = Color.White,
+            modifier = Modifier.testTag(testTag)
+        )
     }
 }

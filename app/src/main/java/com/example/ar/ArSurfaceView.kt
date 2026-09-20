@@ -29,10 +29,13 @@ class ArSurfaceView @JvmOverloads constructor(
     var session: Session? = null
 
     var onTrackingUpdated: ((TrackingState, TrackingFailureReason) -> Unit)? = null
+    var onPoseUpdated: ((CameraPoseData) -> Unit)? = null
+    var onTrackingAndPoseUpdated: ((TrackingState, TrackingFailureReason, CameraPoseData?) -> Unit)? = null
     var onSessionError: ((String) -> Unit)? = null
 
     private var lastTrackingState: TrackingState? = null
     private var lastFailureReason: TrackingFailureReason? = null
+    private var isPoseUpdatePending = false
 
     init {
         preserveEGLContextOnPause = true
@@ -80,11 +83,31 @@ class ArSurfaceView @JvmOverloads constructor(
             val currentTrackingState = camera.trackingState
             val currentFailureReason = camera.trackingFailureReason
 
-            if (currentTrackingState != lastTrackingState || currentFailureReason != lastFailureReason) {
+            val poseData = if (currentTrackingState == TrackingState.TRACKING) {
+                try {
+                    CameraPoseData.fromPose(camera.pose)
+                } catch (e: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
+
+            val stateChanged = (currentTrackingState != lastTrackingState || currentFailureReason != lastFailureReason)
+            if (stateChanged) {
                 lastTrackingState = currentTrackingState
                 lastFailureReason = currentFailureReason
                 mainHandler.post {
                     onTrackingUpdated?.invoke(currentTrackingState, currentFailureReason)
+                    onTrackingAndPoseUpdated?.invoke(currentTrackingState, currentFailureReason, poseData)
+                }
+            } else if (!isPoseUpdatePending && poseData != null) {
+                isPoseUpdatePending = true
+                val capturedPose = poseData
+                mainHandler.post {
+                    isPoseUpdatePending = false
+                    onPoseUpdated?.invoke(capturedPose)
+                    onTrackingAndPoseUpdated?.invoke(currentTrackingState, currentFailureReason, capturedPose)
                 }
             }
 

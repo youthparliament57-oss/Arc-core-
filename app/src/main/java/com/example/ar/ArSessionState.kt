@@ -14,7 +14,8 @@ sealed interface ArSessionState {
     data object Ready : ArSessionState
     data class Active(
         val trackingState: TrackingState = TrackingState.TRACKING,
-        val failureReason: TrackingFailureReason = TrackingFailureReason.NONE
+        val failureReason: TrackingFailureReason = TrackingFailureReason.NONE,
+        val pose: CameraPoseData = CameraPoseData.INITIAL
     ) : ArSessionState
     data object Paused : ArSessionState
     data class Error(val message: String, val canRetry: Boolean = true) : ArSessionState

@@ -31,6 +31,9 @@ class ArSessionManager(private val activity: Activity) {
     private val _sessionState = MutableStateFlow<ArSessionState>(ArSessionState.CheckingCompatibility)
     val sessionState: StateFlow<ArSessionState> = _sessionState.asStateFlow()
 
+    private val _cameraPose = MutableStateFlow(CameraPoseData.INITIAL)
+    val cameraPose: StateFlow<CameraPoseData> = _cameraPose.asStateFlow()
+
     var session: Session? = null
         private set
 
@@ -221,10 +224,23 @@ class ArSessionManager(private val activity: Activity) {
         }
     }
 
+    fun updateTrackingAndPose(state: TrackingState, reason: TrackingFailureReason, pose: CameraPoseData?) {
+        val resolvedPose = pose ?: _cameraPose.value
+        if (pose != null) {
+            _cameraPose.value = pose
+        }
+        _sessionState.value = ArSessionState.Active(
+            trackingState = state,
+            failureReason = reason,
+            pose = resolvedPose
+        )
+    }
+
     fun updateTrackingState(state: TrackingState, reason: TrackingFailureReason) {
         _sessionState.value = ArSessionState.Active(
             trackingState = state,
-            failureReason = reason
+            failureReason = reason,
+            pose = _cameraPose.value
         )
     }
 
