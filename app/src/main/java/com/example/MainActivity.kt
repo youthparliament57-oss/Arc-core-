@@ -88,6 +88,9 @@ import com.example.ar.ArSurfaceView
 import com.example.ar.CameraPoseData
 import com.example.ar.DetectedPlaneData
 import com.example.ar.PlanesTelemetry
+import com.example.ar.ReticleTargetState
+import com.example.ar.SurfaceConfidence
+import com.example.ar.ValidatedSurface
 import com.example.ui.theme.MyApplicationTheme
 import com.google.ar.core.TrackingFailureReason
 import com.google.ar.core.TrackingState
@@ -114,6 +117,7 @@ class MainActivity : ComponentActivity() {
 
                 var showSettingsSheet by remember { mutableStateOf(false) }
                 var showDebugTelemetryHud by remember { mutableStateOf(false) }
+                var showCandidateOutlines by remember { mutableStateOf(false) }
 
                 var hasCameraPermission by remember {
                     mutableStateOf(
@@ -178,6 +182,7 @@ class MainActivity : ComponentActivity() {
                                 factory = { ctx ->
                                     ArSurfaceView(ctx).also { view ->
                                         surfaceView = view
+                                        view.showDebugCandidatePlanes = showCandidateOutlines
                                         view.onTrackingAndPoseUpdated = { state, reason, pose ->
                                             arSessionManager.updateTrackingAndPose(state, reason, pose)
                                         }
@@ -209,28 +214,29 @@ class MainActivity : ComponentActivity() {
                                     .padding(horizontal = 16.dp, vertical = 12.dp)
                             )
 
-                            // Step 3: Central Spatial Reticle
+                            // Step 3 CORRECTION: Central Spatial Reticle responding to validation states
                             ArCentralReticle(
                                 state = sessionState,
-                                isAimingAtSurface = planesTelemetry.isAimingAtSurface,
+                                reticleTargetState = planesTelemetry.reticleTargetState,
                                 modifier = Modifier
                                     .align(Alignment.Center)
                                     .size(64.dp)
                                     .testTag("ar_reticle")
                             )
 
-                            // Step 3: Surface Detection Feedback Banner
+                            // Step 3 CORRECTION: Contextual Surface Feedback Banner (Scanning -> Analyzing -> Surface detected / Ready to place)
                             ArSurfaceFeedbackBanner(
-                                hasDetectedSurface = planesTelemetry.hasDetectedUsableSurface,
-                                isAimingAtSurface = planesTelemetry.isAimingAtSurface,
-                                activePlaneCount = planesTelemetry.activePlaneCount,
+                                reticleTargetState = planesTelemetry.reticleTargetState,
+                                hasValidatedSurface = planesTelemetry.hasValidatedSurface,
+                                validatedSurfaceCount = planesTelemetry.validatedSurfaceCount,
+                                rawPlaneCount = planesTelemetry.rawPlaneCount,
                                 modifier = Modifier
                                     .align(Alignment.Center)
                                     .padding(top = 110.dp)
                                     .testTag("ar_feedback_banner")
                             )
 
-                            // Step 3: Bottom Surface Telemetry Bar
+                            // Step 3 CORRECTION: Bottom Surface Telemetry Bar reflecting validated surfaces
                             ArBottomSurfaceBar(
                                 planesTelemetry = planesTelemetry,
                                 modifier = Modifier
@@ -261,6 +267,11 @@ class MainActivity : ComponentActivity() {
                                     planesTelemetry = planesTelemetry,
                                     showHudOnScreen = showDebugTelemetryHud,
                                     onToggleHudOnScreen = { showDebugTelemetryHud = it },
+                                    showCandidateOutlines = showCandidateOutlines,
+                                    onToggleCandidateOutlines = {
+                                        showCandidateOutlines = it
+                                        surfaceView?.showDebugCandidatePlanes = it
+                                    },
                                     onDismiss = { showSettingsSheet = false }
                                 )
                             }
@@ -372,12 +383,19 @@ fun ArTopBar(
                     color = Color.White
                 )
 
-                if (planesTelemetry.hasDetectedUsableSurface) {
+                if (planesTelemetry.hasValidatedSurface) {
                     Text(
-                        text = "• ${planesTelemetry.activePlaneCount} surface${if (planesTelemetry.activePlaneCount > 1) "s" else ""}",
+                        text = "• ${planesTelemetry.validatedSurfaceCount} usable surface${if (planesTelemetry.validatedSurfaceCount > 1) "s" else ""}",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF38BDF8)
+                    )
+                } else if (planesTelemetry.rawPlaneCount > 0) {
+                    Text(
+                        text = "• Scanning…",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Normal,
-                        color = Color(0xFF38BDF8)
+                        color = Color(0xFFF59E0B)
                     )
                 }
             }
@@ -409,13 +427,13 @@ fun ArTopBar(
 }
 
 /**
- * Step 3: Central AR Reticle.
- * Center-anchored, visually subtle, and adaptive to surface detection aiming state.
+ * Step 3 CORRECTION: Central AR Reticle.
+ * Center-anchored, visually responsive to reticle surface targeting and stability states.
  */
 @Composable
 fun ArCentralReticle(
     state: ArSessionState,
-    isAimingAtSurface: Boolean,
+    reticleTargetState: ReticleTargetState,
     modifier: Modifier = Modifier
 ) {
     val isTracking = state is ArSessionState.Active && state.trackingState == TrackingState.TRACKING
@@ -445,88 +463,123 @@ fun ArCentralReticle(
                 end = Offset(center.x + crossSize, center.y - crossSize),
                 strokeWidth = 1.5.dp.toPx()
             )
-        } else if (isAimingAtSurface) {
-            // State: Surface Detected & Aimed At (◎ Focused Concentric Rings with Glowing Center Dot)
-            val outerRadius = 20.dp.toPx()
-            val innerRadius = 12.dp.toPx()
-            val dotRadius = 3.5.dp.toPx()
+        } else when (reticleTargetState) {
+            ReticleTargetState.VALID_SURFACE -> {
+                // State: Validated Surface Targeted (Focused Dual Rings with Cyan Core & Precision Crosshairs)
+                val outerRadius = 20.dp.toPx()
+                val innerRadius = 12.dp.toPx()
+                val dotRadius = 3.5.dp.toPx()
 
-            // Outer target ring
-            drawCircle(
-                color = Color(0xFF00E5FF).copy(alpha = 0.85f),
-                radius = outerRadius,
-                center = center,
-                style = Stroke(width = 2.dp.toPx())
-            )
+                // Outer target ring
+                drawCircle(
+                    color = Color(0xFF00E5FF).copy(alpha = 0.9f),
+                    radius = outerRadius,
+                    center = center,
+                    style = Stroke(width = 2.dp.toPx())
+                )
 
-            // Inner subtle guide ring
-            drawCircle(
-                color = Color.White.copy(alpha = 0.4f),
-                radius = innerRadius,
-                center = center,
-                style = Stroke(width = 1.dp.toPx())
-            )
+                // Inner guide ring
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.5f),
+                    radius = innerRadius,
+                    center = center,
+                    style = Stroke(width = 1.dp.toPx())
+                )
 
-            // Center targeting dot
-            drawCircle(
-                color = Color(0xFF00E5FF),
-                radius = dotRadius,
-                center = center
-            )
+                // Center targeting dot
+                drawCircle(
+                    color = Color(0xFF00E5FF),
+                    radius = dotRadius,
+                    center = center
+                )
 
-            // 4 Focus tick marks
-            val tickLength = 4.dp.toPx()
-            val tickOffset = outerRadius + 2.dp.toPx()
-            drawLine(Color(0xFF00E5FF), Offset(center.x, center.y - tickOffset), Offset(center.x, center.y - tickOffset - tickLength), 2.dp.toPx())
-            drawLine(Color(0xFF00E5FF), Offset(center.x, center.y + tickOffset), Offset(center.x, center.y + tickOffset + tickLength), 2.dp.toPx())
-            drawLine(Color(0xFF00E5FF), Offset(center.x - tickOffset, center.y), Offset(center.x - tickOffset - tickLength, center.y), 2.dp.toPx())
-            drawLine(Color(0xFF00E5FF), Offset(center.x + tickOffset, center.y), Offset(center.x + tickOffset + tickLength, center.y), 2.dp.toPx())
-        } else {
-            // State: Idle / Scanning (+ Crosshair with clean subtle ring)
-            val ringRadius = 14.dp.toPx()
-            drawCircle(
-                color = Color.White.copy(alpha = 0.65f),
-                radius = ringRadius,
-                center = center,
-                style = Stroke(width = 1.5.dp.toPx())
-            )
+                // 4 Focus tick marks
+                val tickLength = 5.dp.toPx()
+                val tickOffset = outerRadius + 2.dp.toPx()
+                drawLine(Color(0xFF00E5FF), Offset(center.x, center.y - tickOffset), Offset(center.x, center.y - tickOffset - tickLength), 2.dp.toPx())
+                drawLine(Color(0xFF00E5FF), Offset(center.x, center.y + tickOffset), Offset(center.x, center.y + tickOffset + tickLength), 2.dp.toPx())
+                drawLine(Color(0xFF00E5FF), Offset(center.x - tickOffset, center.y), Offset(center.x - tickOffset - tickLength, center.y), 2.dp.toPx())
+                drawLine(Color(0xFF00E5FF), Offset(center.x + tickOffset, center.y), Offset(center.x + tickOffset + tickLength, center.y), 2.dp.toPx())
+            }
+            ReticleTargetState.ANALYZING_SURFACE -> {
+                // State: Analyzing Surface Stability (Amber Ring + Focus Dot)
+                val ringRadius = 16.dp.toPx()
+                drawCircle(
+                    color = Color(0xFFF59E0B).copy(alpha = 0.85f),
+                    radius = ringRadius,
+                    center = center,
+                    style = Stroke(width = 1.5.dp.toPx())
+                )
 
-            // Tiny center pip
-            drawCircle(
-                color = Color.White.copy(alpha = 0.85f),
-                radius = 1.8.dp.toPx(),
-                center = center
-            )
+                // Center amber dot
+                drawCircle(
+                    color = Color(0xFFF59E0B),
+                    radius = 2.5.dp.toPx(),
+                    center = center
+                )
 
-            // Subtle crosshair ticks
-            val tickStart = ringRadius + 2.dp.toPx()
-            val tickLength = 4.dp.toPx()
-            drawLine(Color.White.copy(alpha = 0.65f), Offset(center.x, center.y - tickStart), Offset(center.x, center.y - tickStart - tickLength), 1.5.dp.toPx())
-            drawLine(Color.White.copy(alpha = 0.65f), Offset(center.x, center.y + tickStart), Offset(center.x, center.y + tickStart + tickLength), 1.5.dp.toPx())
-            drawLine(Color.White.copy(alpha = 0.65f), Offset(center.x - tickStart, center.y), Offset(center.x - tickStart - tickLength, center.y), 1.5.dp.toPx())
-            drawLine(Color.White.copy(alpha = 0.65f), Offset(center.x + tickStart, center.y), Offset(center.x + tickStart + tickLength, center.y), 1.5.dp.toPx())
+                // 4 Small tick marks
+                val tickLength = 3.dp.toPx()
+                val tickOffset = ringRadius + 2.dp.toPx()
+                drawLine(Color(0xFFF59E0B).copy(alpha = 0.8f), Offset(center.x, center.y - tickOffset), Offset(center.x, center.y - tickOffset - tickLength), 1.5.dp.toPx())
+                drawLine(Color(0xFFF59E0B).copy(alpha = 0.8f), Offset(center.x, center.y + tickOffset), Offset(center.x, center.y + tickOffset + tickLength), 1.5.dp.toPx())
+                drawLine(Color(0xFFF59E0B).copy(alpha = 0.8f), Offset(center.x - tickOffset, center.y), Offset(center.x - tickOffset - tickLength, center.y), 1.5.dp.toPx())
+                drawLine(Color(0xFFF59E0B).copy(alpha = 0.8f), Offset(center.x + tickOffset, center.y), Offset(center.x + tickOffset + tickLength, center.y), 1.5.dp.toPx())
+            }
+            ReticleTargetState.SEARCHING -> {
+                // State: Idle / Scanning (+ Crosshair with clean subtle ring)
+                val ringRadius = 14.dp.toPx()
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.65f),
+                    radius = ringRadius,
+                    center = center,
+                    style = Stroke(width = 1.5.dp.toPx())
+                )
+
+                // Tiny center pip
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.85f),
+                    radius = 1.8.dp.toPx(),
+                    center = center
+                )
+
+                // Subtle crosshair ticks
+                val tickStart = ringRadius + 2.dp.toPx()
+                val tickLength = 4.dp.toPx()
+                drawLine(Color.White.copy(alpha = 0.65f), Offset(center.x, center.y - tickStart), Offset(center.x, center.y - tickStart - tickLength), 1.5.dp.toPx())
+                drawLine(Color.White.copy(alpha = 0.65f), Offset(center.x, center.y + tickStart), Offset(center.x, center.y + tickStart + tickLength), 1.5.dp.toPx())
+                drawLine(Color.White.copy(alpha = 0.65f), Offset(center.x - tickStart, center.y), Offset(center.x - tickStart - tickLength, center.y), 1.5.dp.toPx())
+                drawLine(Color.White.copy(alpha = 0.65f), Offset(center.x + tickStart, center.y), Offset(center.x + tickStart + tickLength, center.y), 1.5.dp.toPx())
+            }
         }
     }
 }
 
 /**
- * Step 3: Contextual instructional feedback banner.
- * Communicates scanning tips and surface targeting confirmation.
+ * Step 3 CORRECTION: Contextual instructional feedback banner.
+ * Communicates scanning, analyzing stability, and validated placement readiness.
  */
 @Composable
 fun ArSurfaceFeedbackBanner(
-    hasDetectedSurface: Boolean,
-    isAimingAtSurface: Boolean,
-    activePlaneCount: Int,
+    reticleTargetState: ReticleTargetState,
+    hasValidatedSurface: Boolean,
+    validatedSurfaceCount: Int,
+    rawPlaneCount: Int,
     modifier: Modifier = Modifier
 ) {
+    val isTargetingValid = reticleTargetState == ReticleTargetState.VALID_SURFACE
+    val isAnalyzing = reticleTargetState == ReticleTargetState.ANALYZING_SURFACE
+
+    val borderColor = when {
+        isTargetingValid -> Color(0xFF00E5FF).copy(alpha = 0.7f)
+        isAnalyzing -> Color(0xFFF59E0B).copy(alpha = 0.6f)
+        else -> Color(0x33FFFFFF)
+    }
+
     Surface(
         shape = RoundedCornerShape(20.dp),
-        color = if (isAimingAtSurface) Color(0xF20B1120) else Color(0xD90B1120),
-        border = BorderStroke(
-            1.dp,
-            if (isAimingAtSurface) Color(0xFF00E5FF).copy(alpha = 0.7f) else Color(0x33FFFFFF)
-        ),
+        color = if (isTargetingValid || isAnalyzing) Color(0xF20B1120) else Color(0xD90B1120),
+        border = BorderStroke(1.dp, borderColor),
         contentColor = Color.White,
         tonalElevation = 6.dp,
         modifier = modifier
@@ -536,65 +589,92 @@ fun ArSurfaceFeedbackBanner(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
         ) {
-            if (isAimingAtSurface) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF00E5FF))
-                )
-                Column {
-                    Text(
-                        text = stringResource(R.string.feedback_surface_detected),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
+            when (reticleTargetState) {
+                ReticleTargetState.VALID_SURFACE -> {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF00E5FF))
                     )
-                    Text(
-                        text = stringResource(R.string.feedback_tap_to_place),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFF80D8FF)
-                    )
+                    Column {
+                        Text(
+                            text = stringResource(R.string.feedback_surface_detected),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = stringResource(R.string.feedback_ready_to_place),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF80D8FF)
+                        )
+                    }
                 }
-            } else if (hasDetectedSurface) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF10B981))
-                )
-                Text(
-                    text = stringResource(R.string.feedback_surface_detected),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White
-                )
-                Text(
-                    text = "(${activePlaneCount} tracked)",
-                    fontSize = 11.sp,
-                    color = Color(0xFF94A3B8)
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFF59E0B))
-                )
-                Text(
-                    text = stringResource(R.string.feedback_scan_prompt),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Normal,
-                    color = Color(0xFFE2E8F0)
-                )
+                ReticleTargetState.ANALYZING_SURFACE -> {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFF59E0B))
+                    )
+                    Column {
+                        Text(
+                            text = stringResource(R.string.feedback_analyzing_surface),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "Hold steady to confirm stability",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Normal,
+                            color = Color(0xFFFDE68A)
+                        )
+                    }
+                }
+                ReticleTargetState.SEARCHING -> {
+                    if (hasValidatedSurface) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF38BDF8))
+                        )
+                        Text(
+                            text = stringResource(R.string.feedback_target_surface_prompt),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFFE2E8F0)
+                        )
+                        Text(
+                            text = "(${validatedSurfaceCount} ready)",
+                            fontSize = 11.sp,
+                            color = Color(0xFF94A3B8)
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFF59E0B))
+                        )
+                        Text(
+                            text = stringResource(R.string.feedback_scan_prompt),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Normal,
+                            color = Color(0xFFE2E8F0)
+                        )
+                    }
+                }
             }
         }
     }
 }
 
 /**
- * Step 3: Clean bottom interaction area with active surface telemetry.
+ * Step 3 CORRECTION: Bottom interaction area with active validated surface telemetry.
  */
 @Composable
 fun ArBottomSurfaceBar(
@@ -627,7 +707,7 @@ fun ArBottomSurfaceBar(
                         Icon(
                             imageVector = Icons.Default.Layers,
                             contentDescription = null,
-                            tint = Color(0xFF38BDF8),
+                            tint = if (planesTelemetry.hasValidatedSurface) Color(0xFF00E5FF) else Color(0xFF38BDF8),
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -641,7 +721,11 @@ fun ArBottomSurfaceBar(
                         color = Color.White
                     )
                     Text(
-                        text = "Detecting floors, tables and walls",
+                        text = if (planesTelemetry.hasValidatedSurface) {
+                            "${planesTelemetry.validatedSurfaceCount} validated surface${if (planesTelemetry.validatedSurfaceCount > 1) "s" else ""} (${planesTelemetry.rawPlaneCount} raw planes)"
+                        } else {
+                            "Detecting floors, tables and walls (${planesTelemetry.rawPlaneCount} raw)"
+                        },
                         fontSize = 11.sp,
                         color = Color(0xFF94A3B8)
                     )
@@ -653,14 +737,14 @@ fun ArBottomSurfaceBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                if (planesTelemetry.horizontalPlaneCount > 0) {
+                if (planesTelemetry.validatedHorizontalCount > 0) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
                         color = Color(0xFF0F2B48),
                         border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f))
                     ) {
                         Text(
-                            text = "Floor: ${planesTelemetry.horizontalPlaneCount}",
+                            text = "Floor: ${planesTelemetry.validatedHorizontalCount}",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
                             color = Color(0xFF7DD3FC),
@@ -669,14 +753,14 @@ fun ArBottomSurfaceBar(
                     }
                 }
 
-                if (planesTelemetry.verticalPlaneCount > 0) {
+                if (planesTelemetry.validatedVerticalCount > 0) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
                         color = Color(0xFF2E1B4E),
                         border = BorderStroke(1.dp, Color(0xFFA78BFA).copy(alpha = 0.5f))
                     ) {
                         Text(
-                            text = "Wall: ${planesTelemetry.verticalPlaneCount}",
+                            text = "Wall: ${planesTelemetry.validatedVerticalCount}",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
                             color = Color(0xFFC4B5FD),
@@ -685,14 +769,14 @@ fun ArBottomSurfaceBar(
                     }
                 }
 
-                if (planesTelemetry.activePlaneCount == 0) {
+                if (planesTelemetry.validatedSurfaceCount == 0) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
                         color = Color(0xFF261D11),
                         border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.4f))
                     ) {
                         Text(
-                            text = "Scanning...",
+                            text = if (planesTelemetry.rawPlaneCount > 0) "Analyzing..." else "Scanning...",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Normal,
                             color = Color(0xFFFDE68A),
@@ -716,6 +800,8 @@ fun ArSettingsDiagnosticsSheet(
     planesTelemetry: PlanesTelemetry,
     showHudOnScreen: Boolean,
     onToggleHudOnScreen: (Boolean) -> Unit,
+    showCandidateOutlines: Boolean = false,
+    onToggleCandidateOutlines: ((Boolean) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -760,7 +846,7 @@ fun ArSettingsDiagnosticsSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Section 1: Surface Detection (ARCore Planes)
+            // Section 1: Surface Validation & Tracking
             Text(
                 text = stringResource(R.string.settings_section_surface),
                 fontSize = 12.sp,
@@ -775,34 +861,49 @@ fun ArSettingsDiagnosticsSheet(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 MetricCard(
-                    title = "Total",
-                    value = "${planesTelemetry.activePlaneCount}",
+                    title = "Validated",
+                    value = "${planesTelemetry.validatedSurfaceCount}",
                     modifier = Modifier.weight(1f)
                 )
                 MetricCard(
-                    title = "Horizontal",
-                    value = "${planesTelemetry.horizontalPlaneCount}",
+                    title = "Raw Planes",
+                    value = "${planesTelemetry.rawPlaneCount}",
                     modifier = Modifier.weight(1f)
                 )
                 MetricCard(
-                    title = "Vertical",
-                    value = "${planesTelemetry.verticalPlaneCount}",
-                    modifier = Modifier.weight(1f)
+                    title = "Floors / Walls",
+                    value = "${planesTelemetry.validatedHorizontalCount} / ${planesTelemetry.validatedVerticalCount}",
+                    modifier = Modifier.weight(1.2f)
                 )
             }
 
-            if (planesTelemetry.planes.isNotEmpty()) {
+            if (planesTelemetry.validatedSurfaces.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "VALIDATED SURFACES (USABLE)",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF80D8FF),
+                    letterSpacing = 0.5.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(140.dp)
+                        .height(130.dp)
                 ) {
-                    items(planesTelemetry.planes) { plane ->
-                        PlaneItemRow(plane = plane)
+                    items(planesTelemetry.validatedSurfaces) { surface ->
+                        ValidatedSurfaceItemRow(surface = surface)
                     }
                 }
+            } else if (planesTelemetry.rawPlaneCount > 0) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Analyzing ${planesTelemetry.rawPlaneCount} raw candidate planes for stability and minimum area...",
+                    fontSize = 11.sp,
+                    color = Color(0xFFFDE68A)
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -840,20 +941,29 @@ fun ArSettingsDiagnosticsSheet(
             Spacer(modifier = Modifier.height(14.dp))
 
             // Section 3: Developer Options
+            Text(
+                text = "DEVELOPER CONTROLS",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF34D399),
+                letterSpacing = 1.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = stringResource(R.string.settings_overlay_toggle),
-                        fontSize = 14.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
                         color = Color.White
                     )
                     Text(
-                        text = "Real-time position and rotation HUD on camera screen",
+                        text = "Real-time 6-DoF pose & surface stats on camera",
                         fontSize = 11.sp,
                         color = Color(0xFF94A3B8)
                     )
@@ -868,6 +978,39 @@ fun ArSettingsDiagnosticsSheet(
                     ),
                     modifier = Modifier.testTag("ar_hud_toggle")
                 )
+            }
+
+            if (onToggleCandidateOutlines != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Show raw candidates & clutter",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "Render unvalidated ARCore planes in yellow outlines",
+                            fontSize = 11.sp,
+                            color = Color(0xFF94A3B8)
+                        )
+                    }
+
+                    Switch(
+                        checked = showCandidateOutlines,
+                        onCheckedChange = onToggleCandidateOutlines,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Color(0xFFF59E0B)
+                        ),
+                        modifier = Modifier.testTag("ar_raw_planes_toggle")
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -909,6 +1052,73 @@ private fun MetricCard(
                 fontFamily = FontFamily.Monospace,
                 color = Color.White
             )
+        }
+    }
+}
+
+@Composable
+private fun ValidatedSurfaceItemRow(surface: ValidatedSurface) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = Color(0xFF1E293B).copy(alpha = 0.7f),
+        border = BorderStroke(1.dp, Color(0x2600E5FF)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(if (surface.type.isHorizontal) Color(0xFF00E5FF) else Color(0xFFA78BFA))
+                )
+                Text(
+                    text = surface.type.displayName,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color.White
+                )
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = String.format(Locale.US, "%.2f × %.2f m (%.2f m²)", surface.extentX, surface.extentZ, surface.polygonAreaSquareMeters),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    color = Color(0xFF94A3B8)
+                )
+
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = when (surface.confidence) {
+                        SurfaceConfidence.VALID -> Color(0xFF00E5FF).copy(alpha = 0.2f)
+                        SurfaceConfidence.STABILIZING, SurfaceConfidence.CANDIDATE -> Color(0xFFF59E0B).copy(alpha = 0.2f)
+                        else -> Color(0xFFE53935).copy(alpha = 0.2f)
+                    }
+                ) {
+                    Text(
+                        text = surface.confidence.name,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = when (surface.confidence) {
+                            SurfaceConfidence.VALID -> Color(0xFF00E5FF)
+                            SurfaceConfidence.STABILIZING, SurfaceConfidence.CANDIDATE -> Color(0xFFF59E0B)
+                            else -> Color(0xFFE53935)
+                        },
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                }
+            }
         }
     }
 }
@@ -1341,7 +1551,7 @@ fun ArMotionDebugOverlay(
                     if (planesTelemetry != null) {
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "SURFACES TRACKED: ${planesTelemetry.activePlaneCount} (H: ${planesTelemetry.horizontalPlaneCount}, V: ${planesTelemetry.verticalPlaneCount})",
+                            text = "VALIDATED SURFACES: ${planesTelemetry.validatedSurfaceCount} (Floor: ${planesTelemetry.validatedHorizontalCount}, Wall: ${planesTelemetry.validatedVerticalCount}) | Raw: ${planesTelemetry.rawPlaneCount}",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF80DEEA),

@@ -84,7 +84,8 @@ data class DetectedPlaneData(
 }
 
 /**
- * Aggregated telemetry of all surfaces currently tracked by the AR session.
+ * Aggregated telemetry of all surfaces currently tracked by the AR session,
+ * distinguishing raw ARCore planes from validated, placement-ready surfaces.
  */
 data class PlanesTelemetry(
     val planes: List<DetectedPlaneData> = emptyList(),
@@ -93,7 +94,18 @@ data class PlanesTelemetry(
     val verticalPlaneCount: Int = 0,
     val hasDetectedUsableSurface: Boolean = false,
     val isAimingAtSurface: Boolean = false,
-    val nearestPlaneDistance: Float? = null
+    val nearestPlaneDistance: Float? = null,
+    val rawPlanes: List<DetectedPlaneData> = planes,
+    val rawPlaneCount: Int = activePlaneCount,
+    val validatedSurfaces: List<ValidatedSurface> = emptyList(),
+    val validatedSurfaceCount: Int = 0,
+    val validatedHorizontalCount: Int = 0,
+    val validatedVerticalCount: Int = 0,
+    val hasValidatedSurface: Boolean = false,
+    val reticleTargetState: ReticleTargetState = ReticleTargetState.SEARCHING,
+    val targetedSurface: ValidatedSurface? = null,
+    val targetedDistance: Float? = null,
+    val allEvaluatedSurfaces: List<ValidatedSurface> = emptyList()
 ) {
     companion object {
         val EMPTY = PlanesTelemetry()

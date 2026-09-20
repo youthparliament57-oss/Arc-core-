@@ -40,16 +40,29 @@ class PlaneRenderer {
     private var vertexBuffer: FloatBuffer? = null
     private var vertexBufferSize = 0
 
-    // Visual styles: Subtle, professional spatial palette
-    // Horizontal (Floor / Table / Desk): Refined cool spatial blue
-    private val horizontalFillColor = floatArrayOf(0.18f, 0.52f, 0.92f, 0.16f)
-    private val horizontalGridColor = floatArrayOf(0.35f, 0.72f, 1.00f, 0.40f)
-    private val horizontalLineColor = floatArrayOf(0.45f, 0.82f, 1.00f, 0.75f)
+    // Visual styles: Refined, restrained spatial palette
+    // 1. Validated Horizontal Surface (Floor / Table / Desk): Refined cool spatial blue
+    private val horizontalFillColor = floatArrayOf(0.12f, 0.45f, 0.85f, 0.12f)
+    private val horizontalGridColor = floatArrayOf(0.25f, 0.65f, 0.95f, 0.35f)
+    private val horizontalLineColor = floatArrayOf(0.40f, 0.78f, 1.00f, 0.70f)
 
-    // Vertical (Wall / Door): Soft lavender violet
-    private val verticalFillColor = floatArrayOf(0.58f, 0.38f, 0.92f, 0.16f)
-    private val verticalGridColor = floatArrayOf(0.72f, 0.55f, 1.00f, 0.40f)
-    private val verticalLineColor = floatArrayOf(0.82f, 0.65f, 1.00f, 0.75f)
+    // 2. Targeted Horizontal Surface (Under Reticle): High-contrast electric cyan
+    private val horizontalTargetedFillColor = floatArrayOf(0.00f, 0.85f, 0.95f, 0.22f)
+    private val horizontalTargetedGridColor = floatArrayOf(0.00f, 0.92f, 1.00f, 0.55f)
+    private val horizontalTargetedLineColor = floatArrayOf(0.00f, 1.00f, 1.00f, 0.95f)
+
+    // 3. Validated Vertical Surface (Wall / Door): Soft lavender violet
+    private val verticalFillColor = floatArrayOf(0.50f, 0.30f, 0.85f, 0.12f)
+    private val verticalGridColor = floatArrayOf(0.65f, 0.48f, 0.95f, 0.35f)
+    private val verticalLineColor = floatArrayOf(0.78f, 0.60f, 1.00f, 0.70f)
+
+    // 4. Targeted Vertical Surface (Under Reticle): Bright radiant lavender
+    private val verticalTargetedFillColor = floatArrayOf(0.68f, 0.40f, 1.00f, 0.22f)
+    private val verticalTargetedGridColor = floatArrayOf(0.80f, 0.60f, 1.00f, 0.55f)
+    private val verticalTargetedLineColor = floatArrayOf(0.90f, 0.72f, 1.00f, 0.95f)
+
+    // 5. Unvalidated candidate planes (only rendered faintly when debug mode is on)
+    private val unvalidatedLineColor = floatArrayOf(0.95f, 0.70f, 0.20f, 0.15f)
 
     fun createOnGlThread() {
         // Compile Plane Fill + Grid shader program
@@ -100,13 +113,18 @@ class PlaneRenderer {
     }
 
     /**
-     * Renders detected ARCore planes in 3D world space.
+     * Renders ARCore surfaces in 3D world space.
+     * Selectively renders validated surfaces, highlighting any surface currently targeted
+     * by the center reticle, and suppresses unvalidated raw plane clutter.
      */
     fun draw(
         planes: Collection<Plane>,
         camera: Camera,
         projMatrix: FloatArray,
-        viewMatrix: FloatArray
+        viewMatrix: FloatArray,
+        validatedPlaneHashCodes: Set<Int> = emptySet(),
+        targetedPlaneHashCode: Int? = null,
+        showUnvalidatedPlanes: Boolean = false
     ) {
         if (planeProgram == 0 || lineProgram == 0) return
         if (camera.trackingState != TrackingState.TRACKING) return
@@ -118,8 +136,17 @@ class PlaneRenderer {
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
 
         for (plane in planes) {
-            // Only draw actively tracked, non-subsumed planes
+            // Only consider actively tracked, non-subsumed planes
             if (plane.trackingState != TrackingState.TRACKING || plane.subsumedBy != null) {
+                continue
+            }
+
+            val planeHash = plane.hashCode()
+            val isValidated = validatedPlaneHashCodes.contains(planeHash)
+            val isTargeted = planeHash == targetedPlaneHashCode
+
+            // If not validated and debug visualization not requested, skip to eliminate visual clutter
+            if (!isValidated && !showUnvalidatedPlanes) {
                 continue
             }
 
@@ -131,9 +158,34 @@ class PlaneRenderer {
             val pointCount = polygon.remaining() / 2
             val isVertical = plane.type == Plane.Type.VERTICAL
 
-            val fillColor = if (isVertical) verticalFillColor else horizontalFillColor
-            val gridColor = if (isVertical) verticalGridColor else horizontalGridColor
-            val lineColor = if (isVertical) verticalLineColor else horizontalLineColor
+            // Determine appropriate style based on validation and reticle targeting
+            val fillColor: FloatArray
+            val gridColor: FloatArray
+            val lineColor: FloatArray
+            val lineWidth: Float
+            val drawFillAndGrid: Boolean
+
+            if (isValidated) {
+                drawFillAndGrid = true
+                if (isTargeted) {
+                    fillColor = if (isVertical) verticalTargetedFillColor else horizontalTargetedFillColor
+                    gridColor = if (isVertical) verticalTargetedGridColor else horizontalTargetedGridColor
+                    lineColor = if (isVertical) verticalTargetedLineColor else horizontalTargetedLineColor
+                    lineWidth = 3.5f
+                } else {
+                    fillColor = if (isVertical) verticalFillColor else horizontalFillColor
+                    gridColor = if (isVertical) verticalGridColor else horizontalGridColor
+                    lineColor = if (isVertical) verticalLineColor else horizontalLineColor
+                    lineWidth = 2.0f
+                }
+            } else {
+                // Unvalidated candidate (developer debug mode only): Faint subtle outline, no fill or grid
+                drawFillAndGrid = false
+                fillColor = horizontalFillColor
+                gridColor = horizontalGridColor
+                lineColor = unvalidatedLineColor
+                lineWidth = 1.0f
+            }
 
             // Build Model-View-Projection matrix for this plane
             plane.centerPose.toMatrix(modelMatrix, 0)
@@ -141,7 +193,6 @@ class PlaneRenderer {
             Matrix.multiplyMM(modelViewProjectionMatrix, 0, projMatrix, 0, modelViewMatrix, 0)
 
             // Prepare vertex coordinates: (x, 0, z) in local space
-            // Total vertices for triangle fan = pointCount + 2 (center + perimeter + closing first point)
             val fanVertexCount = pointCount + 2
             val totalFloats = fanVertexCount * 3
             val buffer = getOrCreateVertexBuffer(totalFloats)
@@ -174,25 +225,27 @@ class PlaneRenderer {
             buffer.put(firstZ)
             buffer.position(0)
 
-            // --- 1. Draw Subtle Translucent Fill with Geometric Grid ---
-            GLES20.glUseProgram(planeProgram)
-            GLES20.glUniformMatrix4fv(planeMvpUniform, 1, false, modelViewProjectionMatrix, 0)
-            GLES20.glUniform4fv(planeFillColorUniform, 1, fillColor, 0)
-            GLES20.glUniform4fv(planeGridColorUniform, 1, gridColor, 0)
-            GLES20.glUniform1f(planeGridSpacingUniform, 0.25f) // 25cm grid spacing
+            // --- 1. Draw Translucent Fill with Geometric Grid (Validated Surfaces Only) ---
+            if (drawFillAndGrid) {
+                GLES20.glUseProgram(planeProgram)
+                GLES20.glUniformMatrix4fv(planeMvpUniform, 1, false, modelViewProjectionMatrix, 0)
+                GLES20.glUniform4fv(planeFillColorUniform, 1, fillColor, 0)
+                GLES20.glUniform4fv(planeGridColorUniform, 1, gridColor, 0)
+                GLES20.glUniform1f(planeGridSpacingUniform, 0.25f) // 25cm grid spacing
 
-            GLES20.glEnableVertexAttribArray(planePositionAttrib)
-            GLES20.glVertexAttribPointer(
-                planePositionAttrib,
-                3,
-                GLES20.GL_FLOAT,
-                false,
-                3 * FLOAT_SIZE,
-                buffer
-            )
+                GLES20.glEnableVertexAttribArray(planePositionAttrib)
+                GLES20.glVertexAttribPointer(
+                    planePositionAttrib,
+                    3,
+                    GLES20.GL_FLOAT,
+                    false,
+                    3 * FLOAT_SIZE,
+                    buffer
+                )
 
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_FAN, 0, fanVertexCount)
-            GLES20.glDisableVertexAttribArray(planePositionAttrib)
+                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_FAN, 0, fanVertexCount)
+                GLES20.glDisableVertexAttribArray(planePositionAttrib)
+            }
 
             // --- 2. Draw Perimeter Boundary Line ---
             GLES20.glUseProgram(lineProgram)
@@ -211,7 +264,7 @@ class PlaneRenderer {
                 buffer
             )
 
-            GLES20.glLineWidth(3.0f)
+            GLES20.glLineWidth(lineWidth)
             GLES20.glDrawArrays(GLES20.GL_LINE_LOOP, 0, pointCount)
             GLES20.glDisableVertexAttribArray(linePositionAttrib)
         }

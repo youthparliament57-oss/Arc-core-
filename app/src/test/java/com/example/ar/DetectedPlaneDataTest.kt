@@ -57,18 +57,56 @@ class DetectedPlaneDataTest {
         val telemetry = PlanesTelemetry(
             planes = listOf(plane1, plane2),
             activePlaneCount = 2,
-            horizontalPlaneCount = 1,
-            verticalPlaneCount = 1,
-            hasDetectedUsableSurface = true,
-            isAimingAtSurface = true,
-            nearestPlaneDistance = 1.7f
+            rawPlaneCount = 2,
+            hasValidatedSurface = false,
+            reticleTargetState = ReticleTargetState.SEARCHING
         )
 
-        assertEquals(2, telemetry.activePlaneCount)
-        assertEquals(1, telemetry.horizontalPlaneCount)
-        assertEquals(1, telemetry.verticalPlaneCount)
-        assertTrue(telemetry.hasDetectedUsableSurface)
-        assertTrue(telemetry.isAimingAtSurface)
-        assertEquals(1.7f, telemetry.nearestPlaneDistance ?: 0f, 1e-4f)
+        assertEquals(2, telemetry.rawPlaneCount)
+        assertEquals(0, telemetry.validatedSurfaceCount)
+        assertFalse(telemetry.hasValidatedSurface)
+        assertEquals(ReticleTargetState.SEARCHING, telemetry.reticleTargetState)
+    }
+
+    @Test
+    fun validatedSurface_placementReadiness() {
+        val validSurface = ValidatedSurface(
+            id = "surface-1",
+            planeHashCode = 101,
+            type = PlaneType.HORIZONTAL_UPWARD,
+            confidence = SurfaceConfidence.VALID,
+            trackingState = TrackingState.TRACKING,
+            centerTranslationX = 0f,
+            centerTranslationY = -0.5f,
+            centerTranslationZ = -1.2f,
+            normalX = 0f,
+            normalY = 1f,
+            normalZ = 0f,
+            extentX = 0.8f,
+            extentZ = 0.6f,
+            polygonAreaSquareMeters = 0.48f,
+            boundingAreaSquareMeters = 0.48f,
+            trackingFramesCount = 20,
+            centerJitterMeters = 0.01f,
+            distanceFromCamera = 1.3f
+        )
+
+        assertTrue(validSurface.isPlacementReady)
+
+        val candidateSurface = validSurface.copy(confidence = SurfaceConfidence.CANDIDATE)
+        assertFalse(candidateSurface.isPlacementReady)
+
+        val pausedSurface = validSurface.copy(trackingState = TrackingState.PAUSED)
+        assertFalse(pausedSurface.isPlacementReady)
+    }
+
+    @Test
+    fun surfaceValidationConfig_defaultValuesAreStrictAndSafe() {
+        val config = SurfaceValidationConfig()
+        assertTrue("Min horizontal area must be at least 0.10m²", config.minHorizontalAreaSquareMeters >= 0.10f)
+        assertTrue("Min vertical area must be at least 0.10m²", config.minVerticalAreaSquareMeters >= 0.10f)
+        assertTrue("Min horizontal extent must be at least 0.20m", config.minHorizontalExtentX >= 0.20f)
+        assertTrue("Min stability frames required", config.minStabilityFrames >= 5)
+        assertTrue("Max center jitter must be limited", config.maxCenterJitterMeters <= 0.15f)
     }
 }

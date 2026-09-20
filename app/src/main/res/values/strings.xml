@@ -28,17 +28,25 @@
     <string name="status_ar_limited">Tracking limited</string>
     <string name="status_ar_unavailable">AR unavailable</string>
     <string name="feedback_scan_prompt">Move your phone slowly to scan the environment.</string>
+    <string name="feedback_analyzing_surface">Analyzing surface stability…</string>
     <string name="feedback_surface_detected">Surface detected</string>
+    <string name="feedback_ready_to_place">Ready to place</string>
+    <string name="feedback_target_surface_prompt">Point reticle at a detected surface.</string>
     <string name="feedback_tap_to_place">Tap to place</string>
     <string name="feedback_surface_active">Surface detection active</string>
     <string name="feedback_horizontal_tag">Floor / Table</string>
     <string name="feedback_vertical_tag">Wall / Door</string>
     <string name="settings_title">AR Diagnostics &amp; Settings</string>
-    <string name="settings_section_surface">Detected Surfaces</string>
+    <string name="settings_section_surface">Surface Validation &amp; Detection</string>
+    <string name="settings_section_validated">Validated Surfaces</string>
+    <string name="settings_section_raw">Raw ARCore Planes</string>
     <string name="settings_section_motion">Motion Tracking (6-DoF)</string>
     <string name="settings_detected_planes_count">Total Surfaces: %1$d</string>
+    <string name="settings_validated_count">Validated: %1$d</string>
+    <string name="settings_raw_planes_count">Raw Planes: %1$d</string>
     <string name="settings_horizontal_planes">Horizontal (Floor/Table): %1$d</string>
     <string name="settings_vertical_planes">Vertical (Wall/Door): %1$d</string>
     <string name="settings_overlay_toggle">Show Real-Time Telemetry HUD</string>
+    <string name="settings_show_candidates_toggle">Show Candidate Plane Outlines</string>
     <string name="settings_close">Done</string>
 </resources>

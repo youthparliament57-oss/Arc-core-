@@ -27,8 +27,12 @@ class ArSurfaceView @JvmOverloads constructor(
 
     private val backgroundRenderer = BackgroundRenderer()
     private val planeRenderer = PlaneRenderer()
+    private val surfaceValidator = SurfaceValidator()
     val displayRotationHelper = DisplayRotationHelper(context)
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Configurable display mode: whether to show faint outlines for unvalidated candidate planes
+    var showDebugCandidatePlanes: Boolean = false
 
     var session: Session? = null
 
@@ -43,11 +47,13 @@ class ArSurfaceView @JvmOverloads constructor(
     private var isPoseUpdatePending = false
     private var isPlanesUpdatePending = false
 
+    // Viewport dimensions
+    private var viewportWidth = 1
+    private var viewportHeight = 1
+
     // Reusable matrices for projection and view
     private val projMatrix = FloatArray(16)
     private val viewMatrix = FloatArray(16)
-    private val samplePoint = FloatArray(3)
-    private val localSamplePoint = FloatArray(3)
 
     init {
         preserveEGLContextOnPause = true
@@ -75,6 +81,8 @@ class ArSurfaceView @JvmOverloads constructor(
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
+        viewportWidth = width
+        viewportHeight = height
         GLES20.glViewport(0, 0, width, height)
         displayRotationHelper.onSurfaceChanged(width, height)
     }
@@ -127,19 +135,47 @@ class ArSurfaceView @JvmOverloads constructor(
             // Draw camera preview background
             backgroundRenderer.draw(frame)
 
-            // Step 3: Surface Detection Rendering & Telemetry
+            // Step 3 CORRECTION: Validated Surface Detection & Rendering Pipeline
             if (currentTrackingState == TrackingState.TRACKING) {
                 camera.getProjectionMatrix(projMatrix, 0, 0.1f, 100f)
                 camera.getViewMatrix(viewMatrix, 0)
 
-                val allPlanes = currentSession.getAllTrackables(Plane::class.java)
-                // Render physical surfaces overlay in 3D world space
-                planeRenderer.draw(allPlanes, camera, projMatrix, viewMatrix)
+                // 1. Raycast center reticle against ARCore trackables
+                val centerX = viewportWidth / 2f
+                val centerY = viewportHeight / 2f
+                val hitResults = try {
+                    frame.hitTest(centerX, centerY)
+                } catch (e: Exception) {
+                    emptyList()
+                }
+                val centerReticleHit = hitResults.firstOrNull { hit ->
+                    hit.trackable is Plane && hit.distance in surfaceValidator.config.minRayHitDistanceMeters..surfaceValidator.config.maxRayHitDistanceMeters
+                }
 
-                // Compute Plane Telemetry for the spatial UI
+                // 2. Fetch all raw ARCore planes
+                val allPlanes = currentSession.getAllTrackables(Plane::class.java)
+
+                // 3. Process planes through multi-stage validation engine
+                val telemetry = surfaceValidator.processFrame(allPlanes, poseData, camera, centerReticleHit)
+
+                // 4. Extract validated plane hash codes and targeted plane hash code
+                val validatedHashes = telemetry.validatedSurfaces.map { it.planeHashCode }.toSet()
+                val targetedHash = telemetry.targetedSurface?.planeHashCode
+
+                // 5. Render physical surfaces overlay in 3D world space (validated surfaces highlighted, raw clutter suppressed)
+                planeRenderer.draw(
+                    planes = allPlanes,
+                    camera = camera,
+                    projMatrix = projMatrix,
+                    viewMatrix = viewMatrix,
+                    validatedPlaneHashCodes = validatedHashes,
+                    targetedPlaneHashCode = targetedHash,
+                    showUnvalidatedPlanes = showDebugCandidatePlanes
+                )
+
+                // 6. Post validated telemetry to UI thread
                 if (!isPlanesUpdatePending) {
                     isPlanesUpdatePending = true
-                    val telemetry = processPlaneTelemetry(allPlanes, poseData, camera)
                     mainHandler.post {
                         isPlanesUpdatePending = false
                         onPlanesUpdated?.invoke(telemetry)
@@ -161,72 +197,6 @@ class ArSurfaceView @JvmOverloads constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Error in ARCore onDrawFrame", e)
         }
-    }
-
-    private fun processPlaneTelemetry(
-        allPlanes: Collection<Plane>,
-        cameraPose: CameraPoseData?,
-        camera: com.google.ar.core.Camera
-    ): PlanesTelemetry {
-        val activePlanes = mutableListOf<DetectedPlaneData>()
-        var horizontalCount = 0
-        var verticalCount = 0
-        var minDistance = Float.MAX_VALUE
-        var isAimingAtAnyPlane = false
-
-        val cameraPoseObject = camera.pose
-
-        for (plane in allPlanes) {
-            if (plane.trackingState != TrackingState.TRACKING || plane.subsumedBy != null) {
-                continue
-            }
-
-            val planeData = DetectedPlaneData.fromArCorePlane(plane, cameraPose)
-            activePlanes.add(planeData)
-
-            if (planeData.type.isHorizontal) {
-                horizontalCount++
-            } else if (planeData.type == PlaneType.VERTICAL) {
-                verticalCount++
-            }
-
-            minDistance = min(minDistance, planeData.distanceFromCamera)
-
-            // Check if camera line of sight (reticle) points towards this plane
-            if (!isAimingAtAnyPlane) {
-                val planeInverse = plane.centerPose.inverse()
-                // Sample 3 points along the camera's forward optical axis: 1.0m, 1.75m, 2.5m
-                for (dist in floatArrayOf(1.0f, 1.75f, 2.5f)) {
-                    samplePoint[0] = 0f
-                    samplePoint[1] = 0f
-                    samplePoint[2] = -dist
-                    cameraPoseObject.transformPoint(samplePoint, 0, samplePoint, 0)
-                    planeInverse.transformPoint(samplePoint, 0, localSamplePoint, 0)
-
-                    // In plane local space, Y=0 is the plane surface, X is half-extentX, Z is half-extentZ
-                    val withinY = abs(localSamplePoint[1]) < 0.35f
-                    val withinX = abs(localSamplePoint[0]) <= (plane.extentX / 2f + 0.15f)
-                    val withinZ = abs(localSamplePoint[2]) <= (plane.extentZ / 2f + 0.15f)
-
-                    if (withinY && withinX && withinZ) {
-                        isAimingAtAnyPlane = true
-                        break
-                    }
-                }
-            }
-        }
-
-        val hasUsableSurface = activePlanes.isNotEmpty()
-
-        return PlanesTelemetry(
-            planes = activePlanes,
-            activePlaneCount = activePlanes.size,
-            horizontalPlaneCount = horizontalCount,
-            verticalPlaneCount = verticalCount,
-            hasDetectedUsableSurface = hasUsableSurface,
-            isAimingAtSurface = isAimingAtAnyPlane,
-            nearestPlaneDistance = if (activePlanes.isNotEmpty()) minDistance else null
-        )
     }
 
     companion object {
