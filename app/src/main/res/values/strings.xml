@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">AR Camera</string>
+    <string name="camera_permission_required_title">Camera Permission Required</string>
+    <string name="camera_permission_required_description">ARCore requires camera access to track the environment and display the camera feed.</string>
+    <string name="grant_permission_button">Grant Camera Permission</string>
+    <string name="arcore_not_supported">ARCore is not supported on this device.</string>
+    <string name="arcore_installing">ARCore installation required. Please install Google Play Services for AR.</string>
+    <string name="status_initializing">Initializing ARCore…</string>
+    <string name="status_checking_compatibility">Checking ARCore compatibility…</string>
+    <string name="status_ready">ARCore session ready</string>
+    <string name="status_tracking_normal">Tracking: Normal</string>
+    <string name="status_tracking_limited">Tracking: Limited (%1$s)</string>
+    <string name="status_tracking_paused">Tracking: Paused</string>
+    <string name="tracking_reason_initializing">Initializing sensors</string>
+    <string name="tracking_reason_motion">Excessive motion</string>
+    <string name="tracking_reason_insufficient_light">Insufficient light</string>
+    <string name="tracking_reason_bad_state">System busy</string>
+    <string name="tracking_reason_none">None</string>
+    <string name="retry_button">Retry</string>
+</resources>

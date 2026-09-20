@@ -1,0 +1,165 @@
+package com.example.ar
+
+import android.app.Activity
+import android.util.Log
+import com.google.ar.core.ArCoreApk
+import com.google.ar.core.Config
+import com.google.ar.core.Session
+import com.google.ar.core.TrackingFailureReason
+import com.google.ar.core.TrackingState
+import com.google.ar.core.exceptions.CameraNotAvailableException
+import com.google.ar.core.exceptions.UnavailableApkTooOldException
+import com.google.ar.core.exceptions.UnavailableArcoreNotInstalledException
+import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException
+import com.google.ar.core.exceptions.UnavailableSdkTooOldException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * Manages the lifecycle, compatibility checking, configuration,
+ * and state transitions of the Google ARCore Session.
+ */
+class ArSessionManager(private val activity: Activity) {
+
+    private val _sessionState = MutableStateFlow<ArSessionState>(ArSessionState.CheckingCompatibility)
+    val sessionState: StateFlow<ArSessionState> = _sessionState.asStateFlow()
+
+    var session: Session? = null
+        private set
+
+    private var userRequestedInstall = false
+
+    /**
+     * Verifies ARCore availability on this device.
+     * Returns true if ARCore is supported and ready/installable.
+     */
+    fun checkAvailability(onResult: (Boolean) -> Unit) {
+        _sessionState.value = ArSessionState.CheckingCompatibility
+        val availability = ArCoreApk.getInstance().checkAvailability(activity)
+
+        if (availability.isTransient) {
+            // Re-check after brief delay when transient
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                checkAvailability(onResult)
+            }, 200)
+            return
+        }
+
+        when (availability) {
+            ArCoreApk.Availability.SUPPORTED_INSTALLED -> {
+                _sessionState.value = ArSessionState.Ready
+                onResult(true)
+            }
+            ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED,
+            ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD -> {
+                _sessionState.value = ArSessionState.ArCoreInstallRequired
+                onResult(true)
+            }
+            ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE -> {
+                _sessionState.value = ArSessionState.UnsupportedDevice
+                onResult(false)
+            }
+            else -> {
+                _sessionState.value = ArSessionState.Error("Unable to verify ARCore compatibility on this device.")
+                onResult(false)
+            }
+        }
+    }
+
+    /**
+     * Initializes or resumes the ARCore session.
+     */
+    fun resumeSession(surfaceView: ArSurfaceView) {
+        var installResult: ArCoreApk.InstallStatus = ArCoreApk.InstallStatus.INSTALLED
+        try {
+            if (session == null) {
+                // Request ARCore installation if required
+                installResult = ArCoreApk.getInstance().requestInstall(activity, !userRequestedInstall)
+                if (installResult == ArCoreApk.InstallStatus.INSTALL_REQUESTED) {
+                    userRequestedInstall = true
+                    _sessionState.value = ArSessionState.ArCoreInstallRequired
+                    return
+                }
+
+                // Create the ARCore Session
+                val newSession = Session(activity)
+                val config = Config(newSession).apply {
+                    updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
+                    // STEP 1 SCOPE: Plane finding, depth and extra engines explicitly disabled
+                    planeFindingMode = Config.PlaneFindingMode.DISABLED
+                    lightEstimationMode = Config.LightEstimationMode.DISABLED
+                    depthMode = Config.DepthMode.DISABLED
+                }
+                newSession.configure(config)
+                session = newSession
+                surfaceView.session = newSession
+            }
+
+            session?.resume()
+            surfaceView.onResume()
+            _sessionState.value = ArSessionState.Active(
+                trackingState = TrackingState.PAUSED,
+                failureReason = TrackingFailureReason.NONE
+            )
+        } catch (e: UnavailableArcoreNotInstalledException) {
+            Log.e(TAG, "ARCore not installed", e)
+            _sessionState.value = ArSessionState.ArCoreInstallRequired
+        } catch (e: UnavailableApkTooOldException) {
+            Log.e(TAG, "ARCore APK too old", e)
+            _sessionState.value = ArSessionState.Error("Google Play Services for AR must be updated.")
+        } catch (e: UnavailableSdkTooOldException) {
+            Log.e(TAG, "App SDK too old for ARCore", e)
+            _sessionState.value = ArSessionState.Error("App update required to run AR.")
+        } catch (e: UnavailableDeviceNotCompatibleException) {
+            Log.e(TAG, "Device not compatible with ARCore", e)
+            _sessionState.value = ArSessionState.UnsupportedDevice
+        } catch (e: CameraNotAvailableException) {
+            Log.e(TAG, "Camera not available", e)
+            _sessionState.value = ArSessionState.Error("Camera unavailable. Another app may be using the camera.")
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Camera permission missing", e)
+            _sessionState.value = ArSessionState.PermissionRequired
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error resuming AR session", e)
+            _sessionState.value = ArSessionState.Error("Failed to initialize AR: ${e.localizedMessage ?: "Unknown error"}")
+        }
+    }
+
+    fun pauseSession(surfaceView: ArSurfaceView) {
+        try {
+            surfaceView.onPause()
+            session?.pause()
+            if (_sessionState.value is ArSessionState.Active) {
+                _sessionState.value = ArSessionState.Paused
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error pausing AR session", e)
+        }
+    }
+
+    fun destroySession(surfaceView: ArSurfaceView) {
+        try {
+            surfaceView.session = null
+            session?.close()
+            session = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing AR session", e)
+        }
+    }
+
+    fun updateTrackingState(state: TrackingState, reason: TrackingFailureReason) {
+        _sessionState.value = ArSessionState.Active(
+            trackingState = state,
+            failureReason = reason
+        )
+    }
+
+    fun reportError(message: String) {
+        _sessionState.value = ArSessionState.Error(message)
+    }
+
+    companion object {
+        private const val TAG = "ArSessionManager"
+    }
+}
